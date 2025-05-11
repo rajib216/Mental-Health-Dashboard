@@ -25,6 +25,9 @@ let rows                = [],
 
 let clusterColour;  // set after PCA
 
+// keep track of which clusters are checked in the legend
+let selectedClusters = new Set();
+
 // color scales
 const regionColour  = {
   Northeast:"#E4576E", Midwest:"#4E79A7",
@@ -90,7 +93,9 @@ function drawMap(topo) {
         drawHistogram(histSelect.value);
         drawDonut();
         updatePCPVisibility();
-      });
+      })
+      .append("title")
+      .text(d => stateOfFips.get(+d.id));
 
   // state outlines
   svg.append("g").attr("class","states")
@@ -103,54 +108,70 @@ function drawMap(topo) {
   makeMetricLegend(svg, W, H);
 
   // expose for PCP linking
-  updateMapVisibility = ()=> {
+  updateMapVisibility = () => {
+    // dim counties not in the active state
     svg.selectAll(".counties path")
-       .classed("dim", d=>{
-         const st = stateOfFips.get(+d.id);
-         return activeState && st!==activeState;
-       });
+    .classed("dim", d => {
+      const st = stateOfFips.get(+d.id),
+            cl = clusterOfFips.get(+d.id);
+      // dim if outside the activeState OR cluster is unchecked
+      return (activeState && st !== activeState)
+             || !selectedClusters.has(cl);
+    });
+
+
+    // ── NEW: dim state outlines not equal to activeState
+    svg.selectAll(".states path")
+        .classed("dim", d => {
+          const stName = d.properties.name;
+          return activeState && stName !== activeState;
+        });
   };
   updateMapVisibility();
+  
 }
 
-
-/* ────────────────────────────────────────────────────────── */
-/*  DRAW PCA + SET UP PCP + HISTOGRAM + DONUT               */
-/* ────────────────────────────────────────────────────────── */
-function drawPCA(){
+function drawPCA() {
+  // wipe out any old biplot
   pcaHolder.selectAll("*").remove();
 
-  d3.json("/pca").then(({k, points, loadings, top_vars, avg_loading, hist_vars})=>{
-    // clustering
-    clusterOfFips = new Map(points.map(p=>[p.fips, p.cluster]));
-    clusterColour = d3.scaleOrdinal(d3.schemeCategory10).domain(d3.range(k));
+  // fetch new PCA results
+  d3.json("/pca").then(({ k, points, loadings, top_vars, avg_loading, hist_vars }) => {
+    // ──────────────────────────────────────────────────────────
+    // 1) clustering setup
+    // ──────────────────────────────────────────────────────────
+    clusterOfFips = new Map(points.map(p => [p.fips, p.cluster]));
+    clusterColour = d3.scaleOrdinal(d3.schemeCategory10)
+                      .domain(d3.range(k));
 
-    // A) copy full→short onto rows
-    top_vars.forEach(v=>{
-      rows.forEach(r=>{
+    // ──────────────────────────────────────────────────────────
+    // 2) prepare rows & axes list
+    // ──────────────────────────────────────────────────────────
+    top_vars.forEach(v => {
+      rows.forEach(r => {
         r[v.short] = r[v.full];
       });
     });
-
-    // B) axes list uses only short names
     topAxes = [
-      {col:"AvgScore", short:"AvgScore"},
-      ...top_vars.map(v=>({col:v.short, short:v.short}))
+      { col: "AvgScore", short: "AvgScore" },
+      ...top_vars.map(v => ({ col: v.short, short: v.short }))
     ];
 
-    // histogram dropdown
+    // ──────────────────────────────────────────────────────────
+    // 3) histogram dropdown
+    // ──────────────────────────────────────────────────────────
     histSelect.innerHTML = "";
-    hist_vars.forEach(v=>{
+    hist_vars.forEach(v => {
       histSelect.add(new Option(v.short, v.full));
     });
-    histSelect.onchange = ()=> drawHistogram(histSelect.value);
+    histSelect.onchange = () => drawHistogram(histSelect.value);
 
-    // draw PCP first
+    // ──────────────────────────────────────────────────────────
+    // 4) draw & wire up PCP first (for cross‐linking)
+    // ──────────────────────────────────────────────────────────
     drawPCP();
-
-    // Reset‐PCP clears brushes + state filter + redrew
-    pcpResetBtn.addEventListener("click", ()=>{
-      globalBrushes.forEach(({g,brush})=> g.call(brush.move, null));
+    pcpResetBtn.addEventListener("click", () => {
+      globalBrushes.forEach(({ g, brush }) => g.call(brush.move, null));
       activeState = null;
       updateMapVisibility();
       drawHistogram(histSelect.value);
@@ -158,102 +179,185 @@ function drawPCA(){
       updatePCPVisibility();
     });
 
-    // ——— PCA biplot (unchanged) ———
+    // ──────────────────────────────────────────────────────────
+    // 5) set up SVG & scales for PCA
+    // ──────────────────────────────────────────────────────────
     const W = pcaHolder.node().clientWidth,
           H = pcaHolder.node().clientHeight,
-          m = {top:18,right:12,bottom:28,left:34},
+          m = { top: 18, right: 12, bottom: 28, left: 34 },
           w = W - m.left - m.right,
           h = H - m.top  - m.bottom;
 
-    const x = d3.scaleLinear([-1.05,1.05],[0,w]),
-          y = d3.scaleLinear([-1.05,1.05],[h,0]);
+    const x = d3.scaleLinear([-1.05, 1.05], [0, w]),
+          y = d3.scaleLinear([-1.05, 1.05], [h, 0]);
 
     const svg = pcaHolder.append("svg")
-                 .attr("viewBox",`0 0 ${W} ${H}`);
+                 .attr("viewBox", `0 0 ${W} ${H}`);
     const g   = svg.append("g")
-                 .attr("transform",`translate(${m.left},${m.top})`);
+                 .attr("transform", `translate(${m.left},${m.top})`);
 
-    // grid
+    // grid‐lines
     g.append("g").selectAll("line")
-      .data(d3.range(-1,1.1,.5)).join("line")
+      .data(d3.range(-1, 1.1, 0.5)).join("line")
       .attr("class","grid-line")
-      .attr("x1",x(-1.05)).attr("x2",x(1.05))
-      .attr("y1",d=>y(d)).attr("y2",d=>y(d));
+      .attr("x1", x(-1.05)).attr("x2", x(1.05))
+      .attr("y1", d=>y(d)).attr("y2", d=>y(d));
     g.append("g").selectAll("line")
-      .data(d3.range(-1,1.1,.5)).join("line")
+      .data(d3.range(-1, 1.1, 0.5)).join("line")
       .attr("class","grid-line")
-      .attr("y1",y(-1.05)).attr("y2",y(1.05))
-      .attr("x1",d=>x(d)).attr("x2",d=>x(d));
+      .attr("y1", y(-1.05)).attr("y2", y(1.05))
+      .attr("x1", d=>x(d)).attr("x2", d=>x(d));
 
     // axes
-    g.append("g").attr("transform",`translate(0,${h})`)
+    g.append("g")
+      .attr("transform", `translate(0,${h})`)
       .call(d3.axisBottom(x).ticks(5));
     g.append("g")
       .call(d3.axisLeft(y).ticks(5));
-    g.append("text").attr("x",w/2).attr("y",h+24)
-      .attr("text-anchor","middle").style("font-size",".8rem")
+    g.append("text")
+      .attr("x", w/2).attr("y", h+24)
+      .attr("text-anchor","middle")
+      .style("font-size",".8rem")
       .text("PC 1 (norm.)");
-    g.append("text").attr("transform","rotate(-90)")
-      .attr("x",-h/2).attr("y",-28)
-      .attr("text-anchor","middle").style("font-size",".8rem")
+    g.append("text")
+      .attr("transform","rotate(-90)")
+      .attr("x", -h/2).attr("y", -28)
+      .attr("text-anchor","middle")
+      .style("font-size",".8rem")
       .text("PC 2 (norm.)");
 
-    // points
-    g.append("g").selectAll("circle").data(points).join("circle")
-      .attr("cx",d=>x(d.pc1)).attr("cy",d=>y(d.pc2))
-      .attr("r",4).attr("fill",d=>clusterColour(d.cluster))
-      .attr("fill-opacity",.8);
+    // ──────────────────────────────────────────────────────────
+    // 6) draw the points
+    // ──────────────────────────────────────────────────────────
+    g.append("g").selectAll("circle")
+      .data(points)
+      .join("circle")
+        .attr("cx", d=>x(d.pc1))
+        .attr("cy", d=>y(d.pc2))
+        .attr("r", 4)
+        .attr("fill", d=>clusterColour(d.cluster))
+        .attr("fill-opacity", 0.8);
 
-    // legend
-    const leg = g.append("g").attr("transform",`translate(${w-80},0)`);
-    d3.range(k).forEach(i=>{
-      const row = leg.append("g").attr("transform",`translate(0,${i*14})`);
-      row.append("rect").attr("width",10).attr("height",10)
-         .attr("fill",clusterColour(i));
-      row.append("text").attr("x",14).attr("y",9)
-         .style("font-size",".7rem")
-         .text(`Cluster ${i+1}`);
+    // ──────────────────────────────────────────────────────────
+    // 7) NEW: HTML legend + cross‐chart cluster filtering
+    // ──────────────────────────────────────────────────────────
+    // initialize
+    selectedClusters = new Set(d3.range(k));
+
+    // helper to re‐draw everything
+    function updateClusterSelection() {
+      selectedClusters.clear();
+      d3.range(k).forEach(i => {
+        if (d3.select(`#cluster-checkbox-${i}`).property("checked")) {
+          selectedClusters.add(i);
+        }
+      });
+
+      // PCA: dim circles
+      g.selectAll("circle")
+        .attr("fill-opacity", d =>
+          selectedClusters.has(d.cluster) ? 0.8 : 0.1
+        );
+
+      // all other panels
+      updateMapVisibility();
+      updatePCPVisibility();
+      drawHistogram(histSelect.value);
+      drawDonut();
+    }
+
+    // build the legend
+    d3.select("#pca-container").selectAll(".pca-legend").remove();
+    const htmlLegend = d3.select("#pca-container")
+      .append("div")
+        .attr("class","pca-legend");
+
+    d3.range(k).forEach(i => {
+      const row = htmlLegend.append("label")
+        .style("display","flex")
+        .style("align-items","center")
+        .style("margin-bottom","6px");
+
+      row.append("input")
+        .attr("type","checkbox")
+        .property("checked", true)
+        .attr("id", `cluster-checkbox-${i}`)
+        .on("change", updateClusterSelection);
+
+      row.append("span")
+        .text(` Cluster ${i+1}`)
+        .style("margin-left","6px")
+        .style("color", clusterColour(i))
+        .style("font-weight","600");
     });
 
-    // loadings
-    const maxLen = d3.max(loadings,d=>Math.hypot(d.x,d.y)),
-          sf     = 0.9/maxLen;
-    const vecG = g.append("g").attr("stroke","#333").attr("stroke-width",1.1);
-    vecG.selectAll("line").data(loadings).join("line")
-      .attr("x1",x(0)).attr("y1",y(0))
-      .attr("x2",d=>x(d.x*sf)).attr("y2",d=>y(d.y*sf))
-      .attr("marker-end","url(#arr-black)");
-    vecG.selectAll("text").data(loadings).join("text")
-      .attr("class","loading-label")
-      .attr("x",d=>x(d.x*sf*1.05))
-      .attr("y",d=>y(d.y*sf*1.05))
-      .text(d=>d.name);
+    // run once on load
+    updateClusterSelection();
 
-    // AvgScore in red
+    // ──────────────────────────────────────────────────────────
+    // 8) draw loadings & AvgScore arrow
+    // ──────────────────────────────────────────────────────────
+    const maxLen = d3.max(loadings, d=>Math.hypot(d.x,d.y)),
+          sf     = 0.9 / maxLen;
+
+    const vecG = g.append("g")
+                 .attr("stroke","#333")
+                 .attr("stroke-width",1.1);
+    vecG.selectAll("line")
+      .data(loadings)
+      .join("line")
+        .attr("x1", x(0)).attr("y1", y(0))
+        .attr("x2", d=>x(d.x*sf)).attr("y2", d=>y(d.y*sf))
+        .attr("marker-end","url(#arr-black)")
+        .append("title")
+        .text(d => `${d.name} — eigen: ${d.eigenvalue}`);
+    vecG.selectAll("text")
+      .data(loadings)
+      .join("text")
+        .attr("class","loading-label")
+        .attr("x", d=>x(d.x*sf*1.05))
+        .attr("y", d=>y(d.y*sf*1.05))
+        .text(d=>d.name);
+
+    // AvgScore vector
     g.append("line")
-      .attr("x1",x(0)).attr("y1",y(0))
-      .attr("x2",x(avg_loading.x*sf)).attr("y2",y(avg_loading.y*sf))
+      .attr("x1", x(0)).attr("y1", y(0))
+      .attr("x2", x(avg_loading.x*sf)).attr("y2", y(avg_loading.y*sf))
       .attr("stroke","red").attr("stroke-width",2)
       .attr("marker-end","url(#arr-red)");
     g.append("text")
-      .attr("x",x(avg_loading.x*sf*1.05))
-      .attr("y",y(avg_loading.y*sf*1.05))
+      .attr("x", x(avg_loading.x*sf*1.05))
+      .attr("y", y(avg_loading.y*sf*1.05))
       .attr("fill","red")
       .style("font-size",".75rem")
       .text("AvgScore");
 
-    // markers
+    // arrow markers definitions
     const defs = svg.append("defs");
-    defs.append("marker").attr("id","arr-black")
-        .attr("viewBox","0 -4 8 8").attr("markerWidth",6)
-        .attr("markerHeight",6).attr("refX",8).attr("orient","auto")
-      .append("path").attr("d","M0,-4L8,0L0,4").attr("fill","#333");
-    defs.append("marker").attr("id","arr-red")
-        .attr("viewBox","0 -4 8 8").attr("markerWidth",6)
-        .attr("markerHeight",6).attr("refX",8).attr("orient","auto")
-      .append("path").attr("d","M0,-4L8,0L0,4").attr("fill","red");
+    defs.append("marker")
+        .attr("id","arr-black")
+        .attr("viewBox","0 -4 8 8")
+        .attr("markerWidth",6)
+        .attr("markerHeight",6)
+        .attr("refX",8)
+        .attr("orient","auto")
+      .append("path")
+        .attr("d","M0,-4L8,0L0,4")
+        .attr("fill","#333");
+    defs.append("marker")
+        .attr("id","arr-red")
+        .attr("viewBox","0 -4 8 8")
+        .attr("markerWidth",6)
+        .attr("markerHeight",6)
+        .attr("refX",8)
+        .attr("orient","auto")
+      .append("path")
+        .attr("d","M0,-4L8,0L0,4")
+        .attr("fill","red");
 
-    // linked panels
+    // ──────────────────────────────────────────────────────────
+    // 9) finally link other panels
+    // ──────────────────────────────────────────────────────────
     drawHistogram(histSelect.value);
     drawDonut();
   });
@@ -344,6 +448,8 @@ function drawPCP(){
   // filter + enter/exit
   function updateVisibility(){
     const filtered = validRows.filter(d=>{
+      const cl = clusterOfFips.get(d.FIPS_Code);
+      if (!selectedClusters.has(cl)) return false;
       // brushing
       for(const [col,[mn,mx]] of activeBrushes){
         if(+d[col] < mn || +d[col] > mx) return false;
@@ -382,39 +488,118 @@ function drawPCP(){
 /* ────────────────────────────────────────────────────────── */
 /*  DRAW HISTOGRAM                                           */
 /* ────────────────────────────────────────────────────────── */
-function drawHistogram(column){
+function drawHistogram(column) {
   histHolder.selectAll("*").remove();
 
-  const dataRows = activeState
-    ? rows.filter(r=>r.State_Name===activeState)
-    : rows;
-  const data = dataRows.map(r=>+r[column]).filter(v=>!isNaN(v));
+  // filter by state & cluster selection
+  const dataRows = rows.filter(r => {
+    const cl = clusterOfFips.get(r.FIPS_Code),
+          stateOk = !activeState || r.State_Name === activeState;
+    return stateOk && selectedClusters.has(cl);
+  });
 
+  // pull out the numeric values
+  const data = dataRows.map(r => +r[column]).filter(v => !isNaN(v));
+
+  // sizing
   const fullW = histHolder.node().clientWidth,
         fullH = histHolder.node().clientHeight;
-  const m = {top:12,right:24,bottom:35,left:36},
-        W = fullW-m.left-m.right,
-        H = fullH-m.top-m.bottom;
+  const m = { top: 12, right: 24, bottom: 35, left: 36 },
+        W = fullW - m.left - m.right,
+        H = fullH - m.top  - m.bottom;
 
-  const x = d3.scaleLinear().domain(d3.extent(data)).nice().range([0,W]);
-  const bins = d3.bin().domain(x.domain()).thresholds(30)(data);
-  const y    = d3.scaleLinear().domain([0,d3.max(bins,d=>d.length)]).nice().range([H,0]);
+  // scales + bins
+  const x = d3.scaleLinear()
+              .domain(d3.extent(data)).nice()
+              .range([0, W]);
+  const bins = d3.bin()
+                 .domain(x.domain())
+                 .thresholds(30)(data);
+  const y = d3.scaleLinear()
+              .domain([0, d3.max(bins, d => d.length)]).nice()
+              .range([H, 0]);
 
-  const svg = histHolder.append("svg").attr("viewBox",`0 0 ${fullW} ${fullH}`);
-  const g   = svg.append("g").attr("transform",`translate(${m.left},${m.top})`);
+  // base SVG + axes
+  const svg = histHolder.append("svg")
+                .attr("viewBox", `0 0 ${fullW} ${fullH}`);
+  const g = svg.append("g")
+               .attr("transform", `translate(${m.left},${m.top})`);
 
-  g.append("g").attr("transform",`translate(0,${H})`)
+  g.append("g")
+    .attr("transform", `translate(0,${H})`)
     .call(d3.axisBottom(x).ticks(6));
-  g.append("g").call(d3.axisLeft(y).ticks(5));
+  g.append("g")
+    .call(d3.axisLeft(y).ticks(5));
 
-  g.selectAll("rect").data(bins).join("rect")
-    .attr("x",d=>x(d.x0)+.5)
-    .attr("y",d=>y(d.length))
-    .attr("width",d=>Math.max(1, x(d.x1)-x(d.x0)-1))
-    .attr("height",d=>H-y(d.length))
-    .attr("fill","#4E79A7");
+  // draw bars
+  const bars = g.selectAll("rect")
+    .data(bins)
+    .join("rect")
+      .attr("x",      d => x(d.x0) + 0.5)
+      .attr("y",      d => y(d.length))
+      .attr("width",  d => Math.max(1, x(d.x1) - x(d.x0) - 1))
+      .attr("height", d => H - y(d.length))
+      .attr("fill",   "#4E79A7");
+
+  // ──────────────────────────────────────────────────────────
+  //  BRUSH STATE & UPDATE FUNCTION
+  // ──────────────────────────────────────────────────────────
+  let activeX = null;
+  let activeY = null;
+
+  function updateBars() {
+    bars.classed("dim", d => {
+      // out of X-range?
+      if (activeX) {
+        const [xmin, xmax] = activeX;
+        if (d.x0 < xmin || d.x1 > xmax) return true;
+      }
+      // out of Y-range?
+      if (activeY) {
+        const [ymin, ymax] = activeY;
+        if (d.length < ymin || d.length > ymax) return true;
+      }
+      return false;
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  X-BRUSH
+  // ──────────────────────────────────────────────────────────
+  const brushX = d3.brushX()
+    .extent([[0, 0], [W, H]])
+    .on("brush end", ({selection}) => {
+      if (selection) {
+        const [p0, p1] = selection;
+        activeX = [ x.invert(p0), x.invert(p1) ].sort((a,b)=>a-b);
+      } else {
+        activeX = null;
+      }
+      updateBars();
+    });
+  g.append("g")
+    .attr("class", "brush x-brush")
+    .call(brushX);
+
+  // ──────────────────────────────────────────────────────────
+  //  Y-BRUSH
+  // ──────────────────────────────────────────────────────────
+  const brushY = d3.brushY()
+    .extent([[0, 0], [W, H]])
+    .on("brush end", ({selection}) => {
+      if (selection) {
+        const [p0, p1] = selection;
+        // invert vertical pixels back to data-space
+        activeY = [ y.invert(p1), y.invert(p0) ].sort((a,b)=>a-b);
+      } else {
+        activeY = null;
+      }
+      updateBars();
+    });
+  g.append("g")
+    .attr("class", "brush y-brush")
+    .call(brushY);
 }
-
 
 /* ────────────────────────────────────────────────────────── */
 /*  DRAW DONUT                                              */
@@ -422,9 +607,11 @@ function drawHistogram(column){
 function drawDonut(){
   donutHolder.selectAll("*").remove();
 
-  const dataRows = activeState
-    ? rows.filter(r=>r.State_Name===activeState)
-    : rows;
+  const dataRows = rows.filter(r => {
+    const cl = clusterOfFips.get(r.FIPS_Code),
+          stateOk = !activeState || r.State_Name === activeState;
+    return stateOk && selectedClusters.has(cl);
+  });
   const edu = [
     {key:"SomeCollege", col:"Percent of adults completing some college or associate degree, 2019-23"},
     {key:"HSGrad",      col:"Percent of adults who are high school graduates (or equivalent), 2019-23"},
@@ -460,6 +647,34 @@ function drawDonut(){
     .attr("fill",d=>color(d.data.label))
     .attr("stroke","#fff").attr("stroke-width",1);
 
+  svg.selectAll("path")
+  .on("click", function(event, d) {
+    const clicked = d3.select(this);
+    const already = clicked.classed("active-slice");
+    // reset everything
+    svg.selectAll("path")
+      .classed("active-slice", false)
+      .classed("dim", false)
+      .transition().attr("transform", "translate(0,0)");
+
+    if (!already) {
+      // mark this one active
+      clicked.classed("active-slice", true);
+      // compute offset along its bisector
+      const [cx, cy] = arc.centroid(d);
+      const angle = Math.atan2(cy, cx);
+      const offset = 10;
+      clicked.transition()
+        .attr("transform",
+          `translate(${Math.cos(angle)*offset}, ${Math.sin(angle)*offset})`
+        );
+      // dim the rest
+      svg.selectAll("path")
+        .filter(p => p.index !== d.index)
+        .classed("dim", true);
+    }
+  });
+
   svg.selectAll("polyline").data(pie(pieData)).join("polyline")
     .attr("points",d=>{
       const [x0,y0]=arc.centroid(d),
@@ -489,16 +704,6 @@ function drawDonut(){
         .attr("dy", "1.2em")
         .text(pct);
   });
-
-  // svg.selectAll("text").data(pie(pieData)).join("text")
-  //   .attr("transform",d=>{
-  //     const [x1,y1]=labArc.centroid(d),
-  //           [x2,y2]=[x1+(x1<0?-25:25),y1];
-  //     return `translate(${x2},${y2})`;
-  //   })
-  //   .attr("text-anchor",d=>d.startAngle<Math.PI?"start":"end")
-  //   .style("font-size",".75rem")
-  //   .text(d=>`${d.data.label} ${(d.data.value*100).toFixed(1)}%`);
 }
 
 
