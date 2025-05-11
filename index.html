@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mental-Health Dashboard (2020)</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://unpkg.com/topojson-client@3"></script>
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <header><h1>Mental-Health Dashboard</h1></header>
+  <main class="dashboard">
+    <!-- row 1 -->
+    <section id="choropleth-container" class="cell">
+      <h2>
+        Choropleth Map
+        <!-- <button id="reset-map" title="Clear state filter">Reset</button> -->
+      </h2>
+      <div id="choropleth"></div>
+    </section>
+    <section id="pca-container" class="cell">
+      <h2>PCA Biplot</h2>
+      <div id="pca-biplot"></div>
+    </section>
+
+    <!-- row 2 -->
+    <section id="pcp-container" class="cell">
+      <h2>
+        Parallel-Coordinates Plot
+        <button id="reset-pcp" title="Clear brushes">Reset</button>
+      </h2>
+      <div id="pcp-plot"></div>
+    </section>
+
+    <section id="summary-container">
+      <section id="donut-container" class="cell">
+        <h2>Donut Chart</h2>
+        <div id="donut-chart"></div>
+      </section>
+      <section id="bar-container" class="cell">
+        <h2>Histogram</h2>
+        <select id="hist-select"></select>
+        <div id="histogram"></div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

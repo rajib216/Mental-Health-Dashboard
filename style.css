@@ -1,0 +1,76 @@
+/* Reset & typography */
+* { box-sizing:border-box; margin:0; padding:0 }
+body {
+  font-family: system-ui, sans-serif;
+  background: #d8e2ec; color: #222; line-height:1.42;
+}
+
+/* Header */
+header {
+  background:#2f4858; color:#fff;
+  padding:1rem 2rem; text-align:center;
+}
+h1 { font-size:1.8rem }
+
+/* Grid layout */
+.dashboard {
+  display:grid; gap:1rem;
+  padding:1rem 2rem 2rem;
+  grid-template-columns:1fr 1fr;
+  grid-template-rows:55vh 45vh;
+  height:calc(100vh - 148px);
+}
+#choropleth-container { grid-column:1; grid-row:1 }
+#pca-container        { grid-column:2; grid-row:1 }
+#pcp-container        { grid-column:1; grid-row:2 }
+#summary-container    {
+  grid-column:2; grid-row:2;
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:1rem;
+}
+
+/* Card */
+.cell {
+  background:#fff; border-radius:8px;
+  box-shadow:0 2px 4px rgba(0,0,0,.08);
+  padding:.75rem;
+  display:flex; flex-direction:column;
+  overflow:hidden;    /* clip any overflowing chart elements */
+}
+.cell>div {
+  flex:1; min-height:320px;
+  position:relative;
+  overflow:hidden;    /* ensure charts never push the container larger */
+}
+.cell svg {
+  width:100%; height:100%;
+  display:block;      /* remove any inline-block whitespace */
+}
+
+/* Buttons */
+#reset-map,#reset-pcp {
+  margin-left:auto; font-size:.75rem;
+  padding:.2rem .6rem;
+  border:1px solid #666; border-radius:4px;
+  background:#eee; cursor:pointer;
+}
+#reset-map:hover,#reset-pcp:hover { background:#ddd }
+
+/* Select */
+#hist-select {
+  padding:.3rem .6rem; font-size:.9rem;
+  border:1px solid #bbb; border-radius:4px;
+  margin-bottom:.5rem; align-self:flex-start;
+}
+
+/* Responsive */
+@media(max-width:960px) {
+  .dashboard {
+    grid-template-columns:1fr;
+    grid-template-rows:auto auto auto auto;
+  }
+  #summary-container {
+    grid-template-columns:1fr;
+  }
+}
