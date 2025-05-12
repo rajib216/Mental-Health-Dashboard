@@ -25,8 +25,24 @@ let rows                = [],
 
 let clusterColour;  // set after PCA
 
+let activeDonut     = null;     // which slice is clicked
+let donutMeans      = new Map();
+const eduCols = {               // same keys as in drawDonut()
+  SomeCollege: "Percent of adults completing some college or associate degree, 2019-23",
+  HSGrad:      "Percent of adults who are high school graduates (or equivalent), 2019-23",
+  NoHSGrad:    "Percent of adults who are not high school graduates, 2019-23",
+  "Bachelors+": "Percent of adults with a bachelor's degree or higher, 2019-23"
+};
+
+let activeHistCol   = null;     // which column is brushed
+let activeHistRange = null;     // [min, max] in data‐space
+let activeHistYRange = null;
+
 // keep track of which clusters are checked in the legend
 let selectedClusters = new Set();
+
+// track the latest PCP axis‐brush ranges for the map filter
+let activePCPBrushes = new Map();
 
 // color scales
 const regionColour  = {
@@ -81,8 +97,8 @@ function drawMap(topo) {
       .attr("d", path)
       .attr("fill", d=>{
         const r = rows.find(r=>r.FIPS_Code===+d.id);
-        if (!r || r.AvgScore == null) return "#ccc";   // ✱ missing‐data color
-        return choroplethCol(r?.AvgScore||0);
+        if (!r || r.AvgScore == null) return "#ccc";
+        return choroplethCol(r.AvgScore);
       })
       .attr("stroke","#fff").attr("stroke-width",.25)
       .attr("cursor","pointer")
@@ -95,7 +111,7 @@ function drawMap(topo) {
         updatePCPVisibility();
       })
       .append("title")
-      .text(d => stateOfFips.get(+d.id));
+        .text(d=>stateOfFips.get(+d.id));
 
   // state outlines
   svg.append("g").attr("class","states")
@@ -107,28 +123,43 @@ function drawMap(topo) {
 
   makeMetricLegend(svg, W, H);
 
-  // expose for PCP linking
+  // expose for all filters
   updateMapVisibility = () => {
-    // dim counties not in the active state
     svg.selectAll(".counties path")
-    .classed("dim", d => {
-      const st = stateOfFips.get(+d.id),
-            cl = clusterOfFips.get(+d.id);
-      // dim if outside the activeState OR cluster is unchecked
-      return (activeState && st !== activeState)
-             || !selectedClusters.has(cl);
-    });
+      .classed("dim", d => {
+        const fips = +d.id;
+        const r    = rows.find(r=>r.FIPS_Code===fips);
+        const st   = stateOfFips.get(fips);
+        const cl   = clusterOfFips.get(fips);
 
+        // 1) PCA cluster filter
+        if (!selectedClusters.has(cl)) return true;
+        // 2) state-click
+        if (activeState && st !== activeState) return true;
+        // 3) PCP brushes
+        for (const [col,[mn,mx]] of activePCPBrushes) {
+          if (r[col] < mn || r[col] > mx) return true;
+        }
+        // 4) histogram X-range
+        if (activeHistRange && activeHistCol) {
+          if (r[activeHistCol] < activeHistRange[0]
+           || r[activeHistCol] > activeHistRange[1]) 
+            return true;
+        }
+        // 5) donut slice
+        if (activeDonut) {
+          const thresh = donutMeans.get(activeDonut);
+          const col    = eduCols[activeDonut];
+          if (r[col] < thresh) return true;
+        }
+        return false;  // else keep visible
+      });
 
-    // ── NEW: dim state outlines not equal to activeState
+    // dim states only on activeState
     svg.selectAll(".states path")
-        .classed("dim", d => {
-          const stName = d.properties.name;
-          return activeState && stName !== activeState;
-        });
+      .classed("dim", d => activeState && d.properties.name !== activeState);
   };
   updateMapVisibility();
-  
 }
 
 function drawPCA() {
@@ -368,8 +399,12 @@ function drawPCA() {
 /*  DRAW PCP w/ brushing & map linking                      */
 /* ────────────────────────────────────────────────────────── */
 function drawPCP(){
+  // clear out old plot and brushes
   pcpHolder.selectAll("*").remove();
   globalBrushes = [];
+
+  // reset the global brush‐ranges
+  activePCPBrushes.clear();
 
   const W = pcpHolder.node().clientWidth,
         H = pcpHolder.node().clientHeight,
@@ -405,10 +440,7 @@ function drawPCP(){
   // container for our lines
   const pathsG = svg.append("g").attr("class","pcp-paths");
 
-  // brush state
-  const activeBrushes = new Map();
-
-  // draw axes+brushes
+  // draw axes + attach Y‐brushes
   svg.append("g")
     .selectAll("g")
     .data(topAxes)
@@ -434,11 +466,16 @@ function drawPCP(){
         .on("brush end", ev=>{
           if(ev.selection){
             const [y0,y1] = ev.selection.map(y[dim.col].invert);
-            activeBrushes.set(dim.col, [Math.min(y0,y1),Math.max(y0,y1)]);
+            activePCPBrushes.set(
+              dim.col,
+              [Math.min(y0,y1), Math.max(y0,y1)]
+            );
           } else {
-            activeBrushes.delete(dim.col);
+            activePCPBrushes.delete(dim.col);
           }
+          // re-filter both PCP and map
           updatePCPVisibility();
+          updateMapVisibility();
         });
 
       const bg = g.append("g").attr("class","axis-brush").call(brush);
@@ -450,11 +487,12 @@ function drawPCP(){
     const filtered = validRows.filter(d=>{
       const cl = clusterOfFips.get(d.FIPS_Code);
       if (!selectedClusters.has(cl)) return false;
-      // brushing
-      for(const [col,[mn,mx]] of activeBrushes){
+
+      // PCP brushing
+      for(const [col,[mn,mx]] of activePCPBrushes){
         if(+d[col] < mn || +d[col] > mx) return false;
       }
-      // map
+      // state‐click filter
       if(activeState && d.State_Name !== activeState) return false;
       return true;
     });
@@ -470,20 +508,16 @@ function drawPCP(){
         .attr("stroke-width",1)
         .attr("stroke",d=>clusterColour(clusterOfFips.get(d.FIPS_Code)))
         .attr("stroke-opacity",.6)
-        .attr("d", d=> line(
-          topAxes.map(ax=>[ x(ax.col), y[ax.col](+d[ax.col]) ])
-        ))
       .merge(sel)
         .attr("d", d=> line(
           topAxes.map(ax=>[ x(ax.col), y[ax.col](+d[ax.col]) ])
         ));
   }
 
-  // expose & initial draw
+  // hook into our global updater
   updatePCPVisibility = updateVisibility;
   updateVisibility();
 }
-
 
 /* ────────────────────────────────────────────────────────── */
 /*  DRAW HISTOGRAM                                           */
@@ -549,56 +583,46 @@ function drawHistogram(column) {
 
   function updateBars() {
     bars.classed("dim", d => {
-      // out of X-range?
-      if (activeX) {
-        const [xmin, xmax] = activeX;
+      // X‐axis filter
+      if (activeHistRange) {
+        const [xmin, xmax] = activeHistRange;
         if (d.x0 < xmin || d.x1 > xmax) return true;
       }
-      // out of Y-range?
-      if (activeY) {
-        const [ymin, ymax] = activeY;
+      // Y‐axis filter (frequency)
+      if (activeHistYRange) {
+        const [ymin, ymax] = activeHistYRange;
         if (d.length < ymin || d.length > ymax) return true;
       }
       return false;
     });
   }
+  
 
   // ──────────────────────────────────────────────────────────
-  //  X-BRUSH
-  // ──────────────────────────────────────────────────────────
-  const brushX = d3.brushX()
-    .extent([[0, 0], [W, H]])
-    .on("brush end", ({selection}) => {
-      if (selection) {
-        const [p0, p1] = selection;
-        activeX = [ x.invert(p0), x.invert(p1) ].sort((a,b)=>a-b);
-      } else {
-        activeX = null;
-      }
-      updateBars();
-    });
-  g.append("g")
-    .attr("class", "brush x-brush")
-    .call(brushX);
+//  RECTANGULAR BRUSH (x + y simultaneously)
+// ──────────────────────────────────────────────────────────
+const brush2d = d3.brush()
+.extent([[0, 0], [W, H]])
+.on("brush end", ({selection}) => {
+  if (selection) {
+    // selection = [[x0,y0], [x1,y1]]
+    const [[x0, y0], [x1, y1]] = selection;
+    activeHistCol    = column;
+    activeHistRange  = [ x.invert(x0), x.invert(x1) ].sort((a,b)=>a-b);
+    activeHistYRange = [ y.invert(y1), y.invert(y0) ].sort((a,b)=>a-b);
+  } else {
+    activeHistCol    = null;
+    activeHistRange  = null;
+    activeHistYRange = null;
+  }
+  updateBars();
+  updateMapVisibility();
+});
 
-  // ──────────────────────────────────────────────────────────
-  //  Y-BRUSH
-  // ──────────────────────────────────────────────────────────
-  const brushY = d3.brushY()
-    .extent([[0, 0], [W, H]])
-    .on("brush end", ({selection}) => {
-      if (selection) {
-        const [p0, p1] = selection;
-        // invert vertical pixels back to data-space
-        activeY = [ y.invert(p1), y.invert(p0) ].sort((a,b)=>a-b);
-      } else {
-        activeY = null;
-      }
-      updateBars();
-    });
-  g.append("g")
-    .attr("class", "brush y-brush")
-    .call(brushY);
+g.append("g")
+.attr("class", "brush hist-brush")
+.call(brush2d);
+
 }
 
 /* ────────────────────────────────────────────────────────── */
@@ -607,26 +631,28 @@ function drawHistogram(column) {
 function drawDonut(){
   donutHolder.selectAll("*").remove();
 
-  const dataRows = rows.filter(r => {
+  const dataRows = rows.filter(r=>{
     const cl = clusterOfFips.get(r.FIPS_Code),
-          stateOk = !activeState || r.State_Name === activeState;
-    return stateOk && selectedClusters.has(cl);
+          ok = !activeState || r.State_Name === activeState;
+    return ok && selectedClusters.has(cl);
   });
+
   const edu = [
-    {key:"SomeCollege", col:"Percent of adults completing some college or associate degree, 2019-23"},
-    {key:"HSGrad",      col:"Percent of adults who are high school graduates (or equivalent), 2019-23"},
-    {key:"NoHSGrad",    col:"Percent of adults who are not high school graduates, 2019-23"},
-    {key:"Bachelors+",  col:"Percent of adults with a bachelor's degree or higher, 2019-23"}
+    {key:"SomeCollege", col:eduCols.SomeCollege},
+    {key:"HSGrad",      col:eduCols.HSGrad},
+    {key:"NoHSGrad",    col:eduCols.NoHSGrad},
+    {key:"Bachelors+",  col:eduCols["Bachelors+"]}
   ];
 
   const means = edu.map(e=>({
     label:e.key,
     value:d3.mean(dataRows, d=>+d[e.col])
   }));
-  const total = d3.sum(means,d=>d.value);
-  const pieData = means.map(d=>({label:d.label,value:d.value/total}));
+  donutMeans = new Map(means.map(m=>[m.label, m.value]));
+  const total = d3.sum(means, d=>d.value);
+  const pieData = means.map(d=>({label:d.label, value:d.value/total}));
 
-  const {width:W,height:H} = donutHolder.node().getBoundingClientRect();
+  const {width:W, height:H} = donutHolder.node().getBoundingClientRect();
   const R = Math.min(W,H)*0.4, r0 = R*0.6;
 
   const svg = donutHolder.append("svg")
@@ -643,69 +669,72 @@ function drawDonut(){
   const labArc = d3.arc().innerRadius(R+10).outerRadius(R+10);
 
   svg.selectAll("path").data(pie(pieData)).join("path")
-    .attr("d",arc)
-    .attr("fill",d=>color(d.data.label))
-    .attr("stroke","#fff").attr("stroke-width",1);
+    .attr("d", arc)
+    .attr("fill", d=>color(d.data.label))
+    .attr("stroke","#fff")
+    .attr("stroke-width",1)
+    .on("click", function(event, d) {
+      const clicked = d3.select(this);
+      const already = clicked.classed("active-slice");
 
-  svg.selectAll("path")
-  .on("click", function(event, d) {
-    const clicked = d3.select(this);
-    const already = clicked.classed("active-slice");
-    // reset everything
-    svg.selectAll("path")
-      .classed("active-slice", false)
-      .classed("dim", false)
-      .transition().attr("transform", "translate(0,0)");
-
-    if (!already) {
-      // mark this one active
-      clicked.classed("active-slice", true);
-      // compute offset along its bisector
-      const [cx, cy] = arc.centroid(d);
-      const angle = Math.atan2(cy, cx);
-      const offset = 10;
-      clicked.transition()
-        .attr("transform",
-          `translate(${Math.cos(angle)*offset}, ${Math.sin(angle)*offset})`
-        );
-      // dim the rest
+      // reset all slices
       svg.selectAll("path")
-        .filter(p => p.index !== d.index)
-        .classed("dim", true);
-    }
-  });
+        .classed("active-slice", false)
+        .classed("dim", false)
+        .transition().attr("transform", "translate(0,0)");
 
+      if (!already) {
+        activeDonut = d.data.label;
+
+        // pop‐out
+        clicked.classed("active-slice", true);
+        const [cx, cy] = arc.centroid(d);
+        const angle = Math.atan2(cy, cx);
+        const offset = 10;
+        clicked.transition()
+          .attr("transform",
+            `translate(${Math.cos(angle)*offset}, ${Math.sin(angle)*offset})`
+          );
+
+        // dim the rest
+        svg.selectAll("path")
+          .filter(p=>p.index!==d.index)
+          .classed("dim", true);
+      } else {
+        activeDonut = null;
+      }
+
+      // re-filter map
+      updateMapVisibility();
+    });
+
+  // labels & leader lines omitted for brevity…
   svg.selectAll("polyline").data(pie(pieData)).join("polyline")
-    .attr("points",d=>{
-      const [x0,y0]=arc.centroid(d),
-            [x1,y1]=labArc.centroid(d),
-            [x2,y2]=[x1+(x1<0?-20:20),y1];
+    .attr("points", d=>{
+      const [x0,y0] = arc.centroid(d),
+            [x1,y1] = labArc.centroid(d),
+            [x2,y2] = [ x1 + (x1<0? -20:20), y1 ];
       return [[x0,y0],[x1,y1],[x2,y2]];
     })
-    .attr("fill","none").attr("stroke","#333").attr("stroke-width",1);
-  
-  svg.selectAll("text").data(pie(pieData)).join("text")
-  .attr("transform", d => {
-    const [x1,y1] = labArc.centroid(d),
-          [x2,y2] = [x1 + (x1<0 ? -25 : 25), y1];
-    return `translate(${x2},${y2})`;
-  })
-  .attr("text-anchor", d=> d.startAngle < Math.PI ? "start" : "end")
-  .style("font-size",".75rem")
-  .each(function(d) {
-    const pct = (d.data.value * 100).toFixed(1) + "%";
-    d3.select(this)
-      .append("tspan")
-        .attr("x", 0)
-        .attr("dy", "0em")
-        .text(d.data.label)
-      .append("tspan")
-        .attr("x", 0)
-        .attr("dy", "1.2em")
-        .text(pct);
-  });
-}
+    .attr("fill","none")
+    .attr("stroke","#333")
+    .attr("stroke-width",1);
 
+  svg.selectAll("text").data(pie(pieData)).join("text")
+    .attr("transform", d=>{
+      const [x1,y1] = labArc.centroid(d),
+            [x2,y2] = [ x1 + (x1<0? -25:25), y1 ];
+      return `translate(${x2},${y2})`;
+    })
+    .attr("text-anchor", d=> d.startAngle < Math.PI ? "start":"end")
+    .style("font-size",".75rem")
+    .each(function(d) {
+      const pct = (d.data.value*100).toFixed(1) + "%";
+      d3.select(this)
+        .append("tspan").attr("x",0).attr("dy","0em").text(d.data.label)
+        .append("tspan").attr("x",0).attr("dy","1.2em").text(pct);
+    });
+}
 
 /* ────────────────────────────────────────────────────────── */
 /*  COLORBAR HELPER                                         */
