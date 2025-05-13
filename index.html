@@ -13,12 +13,22 @@
   <main class="dashboard">
     <!-- row 1 -->
     <section id="choropleth-container" class="cell">
-      <h2>
+      <h2 class="choropleth-header">
         Choropleth Map
-        <!-- <button id="reset-map" title="Clear state filter">Reset</button> -->
+        <select id="choropleth-select" class="in-header">
+          <option value="AvgScore">Avg Score</option>
+          <option value="Wellbeing_Score">Wellbeing Score</option>
+        </select>
+        <button id="reset-map" title="Clear map filter">Reset</button>
       </h2>
+      
+      <div id="map-mode-selector">
+        <label><input type="radio" name="map-mode" value="state" checked> State</label>
+        <label style="margin-left:1em;"><input type="radio" name="map-mode" value="region"> Region</label>
+      </div>
+      
       <div id="choropleth"></div>
-    </section>
+    </section>    
     <section id="pca-container" class="cell">
       <h2>PCA Biplot</h2>
       <div id="pca-biplot"></div>
@@ -38,11 +48,16 @@
         <h2>Donut Chart</h2>
         <div id="donut-chart"></div>
       </section>
-      <section id="bar-container" class="cell">
-        <h2>Histogram</h2>
-        <select id="hist-select"></select>
-        <div id="histogram"></div>
-      </section>
+      <section id="scatter-container" class="cell">
+        <h2>Scatterplot</h2>
+        <h2>
+          <button id="reset-scatter" title="Clear brush">Reset</button>
+        </h2>
+          <!-- dropdown to pick Y-variable -->
+          <select id="scatter-select"></select>
+          <!-- container for our SVG -->
+          <div id="scatterplot"></div>
+      </section>  
     </section>
   </main>
 </body>

@@ -5,13 +5,19 @@ const CSV_URL    = "data.csv",
       GEO_URL    = "https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json";
 
 const pcpResetBtn = document.getElementById("reset-pcp"),
-      histSelect  = document.getElementById("hist-select");
+      mapResetBtn = document.getElementById("reset-map");
+
+const resetScatterBtn = document.getElementById("reset-scatter");
+      let activeScatterFips = new Set();  // ← holds FIPS codes in the current 2D‐brush
+      let scatterBrush;                   // ← reference to the D3 brush so we can clear it
+      
 
 const mapHolder   = d3.select("#choropleth"),
       pcaHolder   = d3.select("#pca-biplot"),
       pcpHolder   = d3.select("#pcp-plot"),
-      histHolder  = d3.select("#histogram"),
-      donutHolder = d3.select("#donut-chart");
+      donutHolder = d3.select("#donut-chart"),
+      scatterSelect  = d3.select("#scatter-select"),
+      scatterHolder  = d3.select("#scatterplot");
 
 // shared state
 let rows                = [],
@@ -22,6 +28,18 @@ let rows                = [],
     topAxes             = [],      // [{col, short}, ...]
     globalBrushes       = [],      // for PCP reset
     updatePCPVisibility = () => {}; // placeholder
+
+let activeRegion       = null,   // ← NEW
+  selectionMode      = 'state';// ← NEW: 'state' or 'region'
+
+// ─── which field to color the map by: AvgScore | Wellbeing_Score ───
+let mapMetric = 'AvgScore';
+
+const metricLabels = {
+  AvgScore:      'Avg Score',
+  Wellbeing_Score: 'Wellbeing Score'
+};
+
 
 let clusterColour;  // set after PCA
 
@@ -34,10 +52,6 @@ const eduCols = {               // same keys as in drawDonut()
   "Bachelors+": "Percent of adults with a bachelor's degree or higher, 2019-23"
 };
 
-let activeHistCol   = null;     // which column is brushed
-let activeHistRange = null;     // [min, max] in data‐space
-let activeHistYRange = null;
-
 // keep track of which clusters are checked in the legend
 let selectedClusters = new Set();
 
@@ -47,9 +61,19 @@ let activePCPBrushes = new Map();
 // color scales
 const regionColour  = {
   Northeast:"#E4576E", Midwest:"#4E79A7",
-  South:"#76B7B2",     West:"#F28E2C"
+  South:"#76B7B2",     West:"#F28E2C", Southwest: "#59A14F"
 };
 const choroplethCol = d3.scaleSequential(d3.interpolateBlues);
+
+// helper to pick the right interpolator
+function setInterpolator() {
+  if (mapMetric === "AvgScore") {
+    choroplethCol.interpolator(d3.interpolateBlues);
+  } else {
+    choroplethCol.interpolator(d3.interpolateGreens);
+  }
+}
+
 
 
 /* ────────────────────────────────────────────────────────── */
@@ -68,10 +92,50 @@ Promise.all([
     stateOfFips.set(r.FIPS_Code, r.State_Name);
     stateRegion.set(r.State_Name, r.Region);
   });
-  choroplethCol.domain(d3.extent(rows, d=>d.AvgScore));
+  // new: base the domain on whichever metric is selected
+setInterpolator();
+choroplethCol.domain(d3.extent(rows, d => d[mapMetric]));
+
+
+  // NEW: toggle between state vs. region selection
+  d3.selectAll('input[name="map-mode"]').on('change', function() {
+    selectionMode = this.value;      // 'state' or 'region'
+    activeState  = null;            // clear the other filter
+    activeRegion = null;
+    updateMapVisibility();
+    drawDonut();
+    updatePCPVisibility();
+    drawScatter();
+  });
 
   drawMap(topo);
   drawPCA();
+
+  resetScatterBtn.addEventListener("click", () => {
+    // clear the visual brush
+    d3.select(".scatter-brush").call(scatterBrush.move, null);
+    // clear our FIPS set
+    activeScatterFips.clear();
+    // undim all scatter points
+    scatterHolder.selectAll("circle").classed("dim", false);
+    // propagate reset to map, PCP & donut
+    updateMapVisibility();
+    updatePCPVisibility();
+    drawDonut();
+  });
+  
+  // ──────────────────────────────────────────────────────────
+  //  Choropleth “Reset” — clear only map filters
+  // ──────────────────────────────────────────────────────────
+  mapResetBtn.addEventListener("click", () => {
+  activeState  = null;
+  activeRegion = null;
+  updateMapVisibility();
+  // drawPCA();
+  // drawDonut();
+  // updatePCPVisibility();
+  // drawScatter();
+  });
 });
 
 
@@ -97,21 +161,42 @@ function drawMap(topo) {
       .attr("d", path)
       .attr("fill", d=>{
         const r = rows.find(r=>r.FIPS_Code===+d.id);
-        if (!r || r.AvgScore == null) return "#ccc";
-        return choroplethCol(r.AvgScore);
+        if (!r) return "#f4a261";
+        else if (r[mapMetric] == null) return "#ccc";
+        else return choroplethCol(r[mapMetric]);
       })
       .attr("stroke","#fff").attr("stroke-width",.25)
       .attr("cursor","pointer")
-      .on("click", (_,d)=>{
-        const st = stateOfFips.get(+d.id);
-        activeState = (activeState===st ? null : st);
+      .on("click", (_,d) => {
+        const fips = +d.id,
+              st   = stateOfFips.get(fips);
+    
+        if (selectionMode === 'state') {
+          // state‐level click
+          activeState  = (activeState === st ? null : st);
+          activeRegion = null;
+        } else {
+          // region‐level click
+          const reg = stateRegion.get(st);
+          activeRegion = (activeRegion === reg ? null : reg);
+          activeState  = null;
+        }
+    
         updateMapVisibility();
-        drawHistogram(histSelect.value);
         drawDonut();
         updatePCPVisibility();
+        drawScatter(); 
       })
+    
       .append("title")
-        .text(d=>stateOfFips.get(+d.id));
+      .text(d => {
+        const f = +d.id,
+              st = stateOfFips.get(f)||"Unknown",
+              rg = stateRegion.get(st)||"Unknown",
+              val = rows.find(r=>r.FIPS_Code===f)?.[mapMetric];
+        return `${st}\n${rg}\n${metricLabels[mapMetric]}: ${val}`;
+      });
+
 
   // state outlines
   svg.append("g").attr("class","states")
@@ -123,6 +208,83 @@ function drawMap(topo) {
 
   makeMetricLegend(svg, W, H);
 
+  // ─────────────────── metric dropdown hook ───────────────────
+  d3.select("#choropleth-select").on("change", function() {
+    mapMetric = this.value;
+  
+    // 1) recompute color domain & interpolator
+    setInterpolator();
+    choroplethCol.domain(d3.extent(rows, d => d[mapMetric]));
+  
+    // **NEW** — toss out the old gradient defs so makeMetricLegend can start fresh
+    svg.select("defs").remove();
+  
+    // 2) rebuild the colorbar
+    d3.select("#metric-legend").remove();
+    makeMetricLegend(svg, W, H);
+  
+    // 3) recolor each county (preserving any dimming)
+    svg.selectAll(".counties path")
+      .attr("fill", d => {
+        const r = rows.find(r => r.FIPS_Code === +d.id);
+        if (!r) return "#f4a261";
+        else if (r[mapMetric] == null) return "#ccc";
+        else return choroplethCol(r[mapMetric]);
+      })
+      // 4) **also** update its <title> so your tooltip shows the right metric name & value
+      .select("title")
+        .text(d => {
+          const f = +d.id,
+                st = stateOfFips.get(f) || "Unknown",
+                rg = stateRegion.get(st) || "Unknown",
+                val = rows.find(r => r.FIPS_Code === f)?.[mapMetric];
+          return `${st}\n${rg}\n${metricLabels[mapMetric]}: ${val}`;
+        });
+  });
+  
+
+  // ─────────────────── region boundaries ───────────────────
+  const regionMesh = topojson.mesh(
+    topo, topo.objects.states,
+    (a,b) => stateRegion.get(a.properties.name)!==
+              stateRegion.get(b.properties.name)
+  );
+  svg.append("path")
+      .datum(regionMesh)
+      .attr("class","region-boundaries")
+      .attr("d", path)
+      .attr("fill","none")
+      .attr("stroke","#000")
+      .attr("stroke-width",2);
+
+  // ─────────────────── region legend ───────────────────
+  const regionLegend = d3.select("#choropleth-container")
+    .append("div")
+      .attr("class","region-legend")
+      .style("position","absolute")
+      .style("top","5rem")
+      .style("right","3rem")
+      .style("background","rgba(255,255,255,0.9)")
+      .style("padding","0.5rem")
+      .style("border-radius","4px")
+      .style("font-size",".8rem")
+      .style("z-index","5")
+      .style("pointer-events","none"); // let all clicks fall “through” to the map;
+
+  Object.entries(regionColour).forEach(([region,col],i) => {
+    const item = regionLegend.append("div")
+      .style("display","flex")
+      .style("align-items","center")
+      .style("margin-bottom","4px");
+    item.append("span")
+      .style("display","inline-block")
+      .style("width","12px")
+      .style("height","12px")
+      .style("background",col)
+      .style("margin-right","6px");
+    item.append("span").text(region);
+  });
+  
   // expose for all filters
   updateMapVisibility = () => {
     svg.selectAll(".counties path")
@@ -136,15 +298,15 @@ function drawMap(topo) {
         if (!selectedClusters.has(cl)) return true;
         // 2) state-click
         if (activeState && st !== activeState) return true;
+        // 2a) region-click (NEW)
+        if (activeRegion && stateRegion.get(st) !== activeRegion) return true;
         // 3) PCP brushes
         for (const [col,[mn,mx]] of activePCPBrushes) {
           if (r[col] < mn || r[col] > mx) return true;
         }
-        // 4) histogram X-range
-        if (activeHistRange && activeHistCol) {
-          if (r[activeHistCol] < activeHistRange[0]
-           || r[activeHistCol] > activeHistRange[1]) 
-            return true;
+        // 4) Scatter Brush
+        if (activeScatterFips.size && !activeScatterFips.has(fips)) {
+          return true;   // dim any county not in the scatter‐brush
         }
         // 5) donut slice
         if (activeDonut) {
@@ -155,23 +317,36 @@ function drawMap(topo) {
         return false;  // else keep visible
       });
 
-    // dim states only on activeState
+    // dim states only on activeState or activeRegion
     svg.selectAll(".states path")
-      .classed("dim", d => activeState && d.properties.name !== activeState);
+    .classed("dim", d => {
+      if (selectionMode === 'state') {
+        return activeState  && d.properties.name !== activeState;
+      } else {
+        return activeRegion && stateRegion.get(d.properties.name) !== activeRegion;
+      }
+    });
+    
   };
   updateMapVisibility();
 }
 
 function drawPCA() {
-  // wipe out any old biplot
+  // clear out old biplot
   pcaHolder.selectAll("*").remove();
 
   // fetch new PCA results
-  d3.json("/pca").then(({ k, points, loadings, top_vars, avg_loading, hist_vars }) => {
+  d3.json("/pca").then(({ k, points: rawPoints, loadings, top_vars, avg_loading, hist_vars }) => {
     // ──────────────────────────────────────────────────────────
-    // 1) clustering setup
+    // 0) drop the single extreme outlier on PC1
     // ──────────────────────────────────────────────────────────
-    clusterOfFips = new Map(points.map(p => [p.fips, p.cluster]));
+    const maxPC1 = d3.max(rawPoints, d => d.pc1);
+    const points = rawPoints.filter(d => d.pc1 < maxPC1);
+
+    // ──────────────────────────────────────────────────────────
+    // 1) clustering setup (use rawPoints so filtering doesn’t break map/PCP)
+    // ──────────────────────────────────────────────────────────
+    clusterOfFips = new Map(rawPoints.map(p => [p.fips, p.cluster]));
     clusterColour = d3.scaleOrdinal(d3.schemeCategory10)
                       .domain(d3.range(k));
 
@@ -179,65 +354,76 @@ function drawPCA() {
     // 2) prepare rows & axes list
     // ──────────────────────────────────────────────────────────
     top_vars.forEach(v => {
-      rows.forEach(r => {
-        r[v.short] = r[v.full];
-      });
+      rows.forEach(r => { r[v.short] = r[v.full]; });
     });
     topAxes = [
-      { col: "AvgScore", short: "AvgScore" },
-      ...top_vars.map(v => ({ col: v.short, short: v.short }))
+      { col: "AvgScore", short: "AvgScore", full: "AvgScore" },
+      ...top_vars.map(v => ({ col: v.short, short: v.short, full: v.full }))
     ];
 
     // ──────────────────────────────────────────────────────────
-    // 3) histogram dropdown
+    // Populate scatterplot dropdown & wire change → drawScatter
     // ──────────────────────────────────────────────────────────
-    histSelect.innerHTML = "";
-    hist_vars.forEach(v => {
-      histSelect.add(new Option(v.short, v.full));
+    scatterSelect.selectAll("option").remove();
+    topAxes.forEach(ax => {
+      scatterSelect.append("option")
+      .attr("value", ax.col)
+      .text(ax.short);
     });
-    histSelect.onchange = () => drawHistogram(histSelect.value);
+    scatterSelect.on("change", drawScatter);
+
 
     // ──────────────────────────────────────────────────────────
     // 4) draw & wire up PCP first (for cross‐linking)
     // ──────────────────────────────────────────────────────────
     drawPCP();
-    pcpResetBtn.addEventListener("click", () => {
+    pcpResetBtn.onclick = () => {
       globalBrushes.forEach(({ g, brush }) => g.call(brush.move, null));
-      activeState = null;
-      updateMapVisibility();
-      drawHistogram(histSelect.value);
-      drawDonut();
+      activePCPBrushes.clear();
       updatePCPVisibility();
-    });
-
+    };
     // ──────────────────────────────────────────────────────────
-    // 5) set up SVG & scales for PCA
+    // 5) compute dynamic scales to fit filtered points
     // ──────────────────────────────────────────────────────────
     const W = pcaHolder.node().clientWidth,
           H = pcaHolder.node().clientHeight,
-          m = { top: 18, right: 12, bottom: 28, left: 34 },
+          m = { top:18, right:12, bottom:28, left:34 },
           w = W - m.left - m.right,
-          h = H - m.top  - m.bottom;
+          h = H - m.top - m.bottom;
 
-    const x = d3.scaleLinear([-1.05, 1.05], [0, w]),
-          y = d3.scaleLinear([-1.05, 1.05], [h, 0]);
+    // find min/max from the *filtered* points
+    const xVals = points.map(d => d.pc1),
+          yVals = points.map(d => d.pc2);
+    const xMin = d3.min(xVals), xMax = d3.max(xVals),
+          yMin = d3.min(yVals), yMax = d3.max(yVals);
+    const xPad = (xMax - xMin) * 0.05,
+          yPad = (yMax - yMin) * 0.05;
 
+    const x = d3.scaleLinear([xMin - xPad-0.2, xMax + xPad], [0, w]),
+          y = d3.scaleLinear([yMin - yPad-0.1, yMax + yPad+0.1], [h, 0]);
+
+    // ──────────────────────────────────────────────────────────
+    // 6) set up SVG, grid‐lines & axes
+    // ──────────────────────────────────────────────────────────
     const svg = pcaHolder.append("svg")
                  .attr("viewBox", `0 0 ${W} ${H}`);
     const g   = svg.append("g")
                  .attr("transform", `translate(${m.left},${m.top})`);
 
-    // grid‐lines
+    // horizontal grid‐lines
+    const yTicks = y.ticks(5);
     g.append("g").selectAll("line")
-      .data(d3.range(-1, 1.1, 0.5)).join("line")
-      .attr("class","grid-line")
-      .attr("x1", x(-1.05)).attr("x2", x(1.05))
-      .attr("y1", d=>y(d)).attr("y2", d=>y(d));
+      .data(yTicks).join("line")
+        .attr("class", "grid-line")
+        .attr("x1", 0).attr("x2", w)
+        .attr("y1", d => y(d)).attr("y2", d => y(d));
+    // vertical grid‐lines
+    const xTicks = x.ticks(5);
     g.append("g").selectAll("line")
-      .data(d3.range(-1, 1.1, 0.5)).join("line")
-      .attr("class","grid-line")
-      .attr("y1", y(-1.05)).attr("y2", y(1.05))
-      .attr("x1", d=>x(d)).attr("x2", d=>x(d));
+      .data(xTicks).join("line")
+        .attr("class", "grid-line")
+        .attr("y1", 0).attr("y2", h)
+        .attr("x1", d => x(d)).attr("x2", d => x(d));
 
     // axes
     g.append("g")
@@ -245,37 +431,36 @@ function drawPCA() {
       .call(d3.axisBottom(x).ticks(5));
     g.append("g")
       .call(d3.axisLeft(y).ticks(5));
+
+    // axis labels
     g.append("text")
-      .attr("x", w/2).attr("y", h+24)
-      .attr("text-anchor","middle")
-      .style("font-size",".8rem")
+      .attr("x", w/2).attr("y", h + 24)
+      .attr("text-anchor", "middle")
+      .style("font-size", ".8rem")
       .text("PC 1 (norm.)");
     g.append("text")
-      .attr("transform","rotate(-90)")
+      .attr("transform", "rotate(-90)")
       .attr("x", -h/2).attr("y", -28)
-      .attr("text-anchor","middle")
-      .style("font-size",".8rem")
+      .attr("text-anchor", "middle")
+      .style("font-size", ".8rem")
       .text("PC 2 (norm.)");
 
     // ──────────────────────────────────────────────────────────
-    // 6) draw the points
+    // 7) plot the filtered points
     // ──────────────────────────────────────────────────────────
     g.append("g").selectAll("circle")
       .data(points)
       .join("circle")
-        .attr("cx", d=>x(d.pc1))
-        .attr("cy", d=>y(d.pc2))
+        .attr("cx", d => x(d.pc1))
+        .attr("cy", d => y(d.pc2))
         .attr("r", 4)
-        .attr("fill", d=>clusterColour(d.cluster))
+        .attr("fill", d => clusterColour(d.cluster))
         .attr("fill-opacity", 0.8);
 
     // ──────────────────────────────────────────────────────────
-    // 7) NEW: HTML legend + cross‐chart cluster filtering
+    // 8) HTML legend + cluster‐filtering
     // ──────────────────────────────────────────────────────────
-    // initialize
     selectedClusters = new Set(d3.range(k));
-
-    // helper to re‐draw everything
     function updateClusterSelection() {
       selectedClusters.clear();
       d3.range(k).forEach(i => {
@@ -283,74 +468,57 @@ function drawPCA() {
           selectedClusters.add(i);
         }
       });
-
-      // PCA: dim circles
       g.selectAll("circle")
         .attr("fill-opacity", d =>
           selectedClusters.has(d.cluster) ? 0.8 : 0.1
         );
-
-      // all other panels
       updateMapVisibility();
       updatePCPVisibility();
-      drawHistogram(histSelect.value);
       drawDonut();
+      drawScatter();
     }
-
-    // build the legend
     d3.select("#pca-container").selectAll(".pca-legend").remove();
     const htmlLegend = d3.select("#pca-container")
-      .append("div")
-        .attr("class","pca-legend");
-
+      .append("div").attr("class","pca-legend");
     d3.range(k).forEach(i => {
       const row = htmlLegend.append("label")
         .style("display","flex")
         .style("align-items","center")
         .style("margin-bottom","6px");
-
       row.append("input")
         .attr("type","checkbox")
         .property("checked", true)
         .attr("id", `cluster-checkbox-${i}`)
         .on("change", updateClusterSelection);
-
       row.append("span")
         .text(` Cluster ${i+1}`)
         .style("margin-left","6px")
         .style("color", clusterColour(i))
         .style("font-weight","600");
     });
-
-    // run once on load
     updateClusterSelection();
 
     // ──────────────────────────────────────────────────────────
-    // 8) draw loadings & AvgScore arrow
+    // 9) loadings & AvgScore arrow (unchanged)
     // ──────────────────────────────────────────────────────────
-    const maxLen = d3.max(loadings, d=>Math.hypot(d.x,d.y)),
-          sf     = 0.9 / maxLen;
-
+    const maxLen = d3.max(loadings, d => Math.hypot(d.x, d.y)),
+          sf     = 0.5 / maxLen;
     const vecG = g.append("g")
                  .attr("stroke","#333")
                  .attr("stroke-width",1.1);
     vecG.selectAll("line")
-      .data(loadings)
-      .join("line")
+      .data(loadings).join("line")
         .attr("x1", x(0)).attr("y1", y(0))
-        .attr("x2", d=>x(d.x*sf)).attr("y2", d=>y(d.y*sf))
+        .attr("x2", d => x(d.x*sf)).attr("y2", d => y(d.y*sf))
         .attr("marker-end","url(#arr-black)")
         .append("title")
-        .text(d => `${d.name} — eigen: ${d.eigenvalue}`);
+          .text(d => `${d.name}\nEigenvalue: ${d.eigenvalue}`);
     vecG.selectAll("text")
-      .data(loadings)
-      .join("text")
+      .data(loadings).join("text")
         .attr("class","loading-label")
-        .attr("x", d=>x(d.x*sf*1.05))
-        .attr("y", d=>y(d.y*sf*1.05))
-        .text(d=>d.name);
-
-    // AvgScore vector
+        .attr("x", d => x(d.x*sf*1.05))
+        .attr("y", d => y(d.y*sf*1.05))
+        .text(d => d.name);
     g.append("line")
       .attr("x1", x(0)).attr("y1", y(0))
       .attr("x2", x(avg_loading.x*sf)).attr("y2", y(avg_loading.y*sf))
@@ -362,8 +530,6 @@ function drawPCA() {
       .attr("fill","red")
       .style("font-size",".75rem")
       .text("AvgScore");
-
-    // arrow markers definitions
     const defs = svg.append("defs");
     defs.append("marker")
         .attr("id","arr-black")
@@ -387,11 +553,126 @@ function drawPCA() {
         .attr("fill","red");
 
     // ──────────────────────────────────────────────────────────
-    // 9) finally link other panels
+    // 10) re-draw linked panels
     // ──────────────────────────────────────────────────────────
-    drawHistogram(histSelect.value);
     drawDonut();
+    drawScatter();
   });
+}
+
+/* ────────────────────────────────────────────────────────── */
+/*  DRAW Scatterplot with 2D-brush                          */
+/* ────────────────────────────────────────────────────────── */
+function drawScatter() {
+  const variable = scatterSelect.property("value");
+  // clear old
+  scatterHolder.selectAll("*").remove();
+
+  // apply same filters as PCP & donut
+  const pts = rows.filter(r => {
+    const cl = clusterOfFips.get(r.FIPS_Code);
+    if (!selectedClusters.has(cl)) return false;
+    if (activeState   && r.State_Name                  !== activeState)  return false;
+    if (activeRegion  && stateRegion.get(r.State_Name) !== activeRegion) return false;
+    for (const [col,[mn,mx]] of activePCPBrushes) {
+      if (r[col] < mn || r[col] > mx) return false;
+    }
+    if (activeDonut) {
+      const thresh = donutMeans.get(activeDonut),
+            col    = eduCols[activeDonut];
+      if (r[col] < thresh) return false;
+    }
+    return true;
+  });
+
+  // build (x,y) = (AvgScore, chosen variable)
+  const data = pts.map(r => ({
+    x: +r.AvgScore,
+    y: +r[variable],
+    fips: r.FIPS_Code
+  }));
+
+  // sizing
+  const fullW = scatterHolder.node().clientWidth,
+        fullH = scatterHolder.node().clientHeight,
+        m     = { top:12, right:12, bottom:36, left:42 },
+        W     = fullW - m.left - m.right,
+        H     = fullH - m.top  - m.bottom;
+
+  // scales
+  const x = d3.scaleLinear()
+             .domain(d3.extent(data, d=>d.x))
+             .range([0,W]),
+       y = d3.scaleLinear()
+             .domain(d3.extent(data, d=>d.y))
+             .range([H,0]);
+
+  // SVG + axes
+  const svg = scatterHolder.append("svg")
+                .attr("viewBox", `0 0 ${fullW} ${fullH}`);
+  const g = svg.append("g")
+               .attr("transform", `translate(${m.left},${m.top})`);
+
+  g.append("g")
+    .attr("transform", `translate(0,${H})`)
+    .call(d3.axisBottom(x).ticks(6));
+
+  g.append("g")
+    .call(d3.axisLeft(y).ticks(6));
+
+  // axis labels
+  g.append("text")
+    .attr("x", W/2).attr("y", H + 30)
+    .attr("text-anchor", "middle")
+    .text("Avg(Anxiety,Depression)");
+
+  g.append("text")
+    .attr("transform", "rotate(-90)")
+    .attr("x", -H/2).attr("y", -34)
+    .attr("text-anchor", "middle")
+    .text(variable);
+
+  // draw points
+  const dots = g.selectAll("circle")
+    .data(data).join("circle")
+      .attr("cx", d=>x(d.x))
+      .attr("cy", d=>y(d.y))
+      .attr("r", 4)
+      .attr("fill-opacity", 0.8)
+      .attr("fill", "#444");
+
+  // 2D brush
+  const brush2d = d3.brush()
+  .extent([[0,0],[W,H]])
+  .on("brush end", ({selection}) => {
+    // reset our FIPS‐set
+    activeScatterFips.clear();
+    if (selection) {
+      const [[x0,y0],[x1,y1]] = selection;
+      data.forEach(d => {
+        if (
+          d.x >= x.invert(x0) && d.x <= x.invert(x1) &&
+          d.y >= y.invert(y1) && d.y <= y.invert(y0)
+        ) activeScatterFips.add(d.fips);
+      });
+      // dim points outside the brush
+      dots.classed("dim", d => !activeScatterFips.has(d.fips));
+    } else {
+      // no brush → undim all
+      dots.classed("dim", false);
+    }
+    // propagate to map, PCP & donut:
+    updateMapVisibility();
+    updatePCPVisibility();
+    drawDonut();
+    });
+
+  // keep a handle to the brush so reset can clear it
+  scatterBrush = brush2d;
+
+  g.append("g")
+    .attr("class","brush scatter-brush")
+    .call(brush2d);
 }
 
 
@@ -408,7 +689,7 @@ function drawPCP(){
 
   const W = pcpHolder.node().clientWidth,
         H = pcpHolder.node().clientHeight,
-        m = { top:20, right:8, bottom:16, left:8 },
+        m = { top:20, right:8, bottom:32, left:8 },
         width  = W - m.left - m.right,
         height = H - m.top  - m.bottom;
 
@@ -440,25 +721,72 @@ function drawPCP(){
   // container for our lines
   const pathsG = svg.append("g").attr("class","pcp-paths");
 
-  // draw axes + attach Y‐brushes
-  svg.append("g")
+  // ──────────────────────────────────────────────────────────
+  //  DRAW PCP axes + brushing + drag-to-reorder
+  // ──────────────────────────────────────────────────────────
+  // we’ll keep a handle to the axis <g> selection so we can reorder it
+  const axes = svg.append("g")
     .selectAll("g")
-    .data(topAxes)
+    .data(topAxes, d => d.col)
     .join("g")
-      .attr("transform", d=>`translate(${x(d.col)},0)`)
-    .each(function(dim){
-      const g = d3.select(this);
+      .attr("class", "axis")
+      .attr("transform", d => `translate(${x(d.col)},0)`)
+      .call(d3.drag()
+        // start with the axis’s current x-pos
+        .subject((event,d) => ({ x: x(d.col) }))
+        .on("start", function(event,d){
+          d3.select(this).raise().classed("dragging", true);
+        })
+        .on("drag", function(event,d){
+          // clamp to [0,width]
+          const xPos = Math.max(0, Math.min(width, event.x));
+          d3.select(this).attr("transform", `translate(${xPos},0)`);
 
-      // axis
-      g.call(d3.axisLeft(y[dim.col]).ticks(3))
-       .selectAll("text").style("font-size",".7rem");
+          // build new order by reading each axis’s current x
+          const order = axes.nodes()
+            .map(node => {
+              const dd = d3.select(node).datum();
+              const tx = +d3.select(node)
+                             .attr("transform")
+                             .match(/translate\(([^,]+)/)[1];
+              return { dd, tx };
+            })
+            .sort((a,b) => a.tx - b.tx)
+            .map(o => o.dd);
 
-      // label
-      g.append("text")
-       .attr("x",0).attr("y",-10)
-       .attr("text-anchor","middle")
-       .style("font-size",".8rem").style("font-weight","600")
-       .text(dim.short);
+          // update the shared topAxes & x-scale domain
+          topAxes = order;
+          x.domain(topAxes.map(d => d.col));
+
+          // immediately redraw the lines
+          updateVisibility();
+        })
+        .on("end", function(event,d){
+          d3.select(this).classed("dragging", false);
+          // snap all axes back to their new “official” x-positions
+          axes.transition()
+              .attr("transform", a => `translate(${x(a.col)},0)`);
+        })
+      );
+
+  // now for each axis, re-attach your axis, label, and brush
+  axes.each(function(dim){
+    const g = d3.select(this);
+
+    // the vertical axis line
+    g.call(d3.axisLeft(y[dim.col]).ticks(3))
+      .selectAll("text").style("font-size",".7rem");
+
+    // the axis label above it
+    g.append("text")
+      .attr("class","axis-label")
+      .attr("x",0).attr("y",-8)
+      .attr("text-anchor","middle")
+      .style("pointer-events","none")
+      .style("font-size",".8rem")
+      .style("font-weight","600")
+      .text(dim.short);
+
 
       // brush
       const brush = d3.brushY()
@@ -474,8 +802,11 @@ function drawPCP(){
             activePCPBrushes.delete(dim.col);
           }
           // re-filter both PCP and map
-          updatePCPVisibility();
+          // updatePCPVisibility();
           updateMapVisibility();
+          drawDonut();
+          updatePCPVisibility();
+          drawScatter();
         });
 
       const bg = g.append("g").attr("class","axis-brush").call(brush);
@@ -485,15 +816,26 @@ function drawPCP(){
   // filter + enter/exit
   function updateVisibility(){
     const filtered = validRows.filter(d=>{
-      const cl = clusterOfFips.get(d.FIPS_Code);
-      if (!selectedClusters.has(cl)) return false;
-
-      // PCP brushing
-      for(const [col,[mn,mx]] of activePCPBrushes){
-        if(+d[col] < mn || +d[col] > mx) return false;
+      if (activeScatterFips.size && !activeScatterFips.has(d.FIPS_Code)) {
+        return false; // drop lines whose FIPS isn’t in the scatter selection
       }
-      // state‐click filter
-      if(activeState && d.State_Name !== activeState) return false;
+      const cl = clusterOfFips.get(d.FIPS_Code);
+      // 1) cluster filter
+      if (!selectedClusters.has(cl)) return false;
+      // 2) state‐click filter
+      if (activeState && d.State_Name !== activeState) return false;
+      // 2a) region‐click filter
+      if (activeRegion && stateRegion.get(d.State_Name) !== activeRegion) return false;
+      // 3) PCP brushing filter
+      for (const [col,[mn,mx]] of activePCPBrushes) {
+        if (+d[col] < mn || +d[col] > mx) return false;
+      }
+      // 4) donut‐slice filter
+      if (activeDonut) {
+        const thresh = donutMeans.get(activeDonut);
+        const col    = eduCols[activeDonut];
+        if (+d[col] < thresh) return false;
+      }
       return true;
     });
 
@@ -520,122 +862,32 @@ function drawPCP(){
 }
 
 /* ────────────────────────────────────────────────────────── */
-/*  DRAW HISTOGRAM                                           */
-/* ────────────────────────────────────────────────────────── */
-function drawHistogram(column) {
-  histHolder.selectAll("*").remove();
-
-  // filter by state & cluster selection
-  const dataRows = rows.filter(r => {
-    const cl = clusterOfFips.get(r.FIPS_Code),
-          stateOk = !activeState || r.State_Name === activeState;
-    return stateOk && selectedClusters.has(cl);
-  });
-
-  // pull out the numeric values
-  const data = dataRows.map(r => +r[column]).filter(v => !isNaN(v));
-
-  // sizing
-  const fullW = histHolder.node().clientWidth,
-        fullH = histHolder.node().clientHeight;
-  const m = { top: 12, right: 24, bottom: 35, left: 36 },
-        W = fullW - m.left - m.right,
-        H = fullH - m.top  - m.bottom;
-
-  // scales + bins
-  const x = d3.scaleLinear()
-              .domain(d3.extent(data)).nice()
-              .range([0, W]);
-  const bins = d3.bin()
-                 .domain(x.domain())
-                 .thresholds(30)(data);
-  const y = d3.scaleLinear()
-              .domain([0, d3.max(bins, d => d.length)]).nice()
-              .range([H, 0]);
-
-  // base SVG + axes
-  const svg = histHolder.append("svg")
-                .attr("viewBox", `0 0 ${fullW} ${fullH}`);
-  const g = svg.append("g")
-               .attr("transform", `translate(${m.left},${m.top})`);
-
-  g.append("g")
-    .attr("transform", `translate(0,${H})`)
-    .call(d3.axisBottom(x).ticks(6));
-  g.append("g")
-    .call(d3.axisLeft(y).ticks(5));
-
-  // draw bars
-  const bars = g.selectAll("rect")
-    .data(bins)
-    .join("rect")
-      .attr("x",      d => x(d.x0) + 0.5)
-      .attr("y",      d => y(d.length))
-      .attr("width",  d => Math.max(1, x(d.x1) - x(d.x0) - 1))
-      .attr("height", d => H - y(d.length))
-      .attr("fill",   "#4E79A7");
-
-  // ──────────────────────────────────────────────────────────
-  //  BRUSH STATE & UPDATE FUNCTION
-  // ──────────────────────────────────────────────────────────
-  let activeX = null;
-  let activeY = null;
-
-  function updateBars() {
-    bars.classed("dim", d => {
-      // X‐axis filter
-      if (activeHistRange) {
-        const [xmin, xmax] = activeHistRange;
-        if (d.x0 < xmin || d.x1 > xmax) return true;
-      }
-      // Y‐axis filter (frequency)
-      if (activeHistYRange) {
-        const [ymin, ymax] = activeHistYRange;
-        if (d.length < ymin || d.length > ymax) return true;
-      }
-      return false;
-    });
-  }
-  
-
-  // ──────────────────────────────────────────────────────────
-//  RECTANGULAR BRUSH (x + y simultaneously)
-// ──────────────────────────────────────────────────────────
-const brush2d = d3.brush()
-.extent([[0, 0], [W, H]])
-.on("brush end", ({selection}) => {
-  if (selection) {
-    // selection = [[x0,y0], [x1,y1]]
-    const [[x0, y0], [x1, y1]] = selection;
-    activeHistCol    = column;
-    activeHistRange  = [ x.invert(x0), x.invert(x1) ].sort((a,b)=>a-b);
-    activeHistYRange = [ y.invert(y1), y.invert(y0) ].sort((a,b)=>a-b);
-  } else {
-    activeHistCol    = null;
-    activeHistRange  = null;
-    activeHistYRange = null;
-  }
-  updateBars();
-  updateMapVisibility();
-});
-
-g.append("g")
-.attr("class", "brush hist-brush")
-.call(brush2d);
-
-}
-
-/* ────────────────────────────────────────────────────────── */
 /*  DRAW DONUT                                              */
 /* ────────────────────────────────────────────────────────── */
 function drawDonut(){
   donutHolder.selectAll("*").remove();
 
-  const dataRows = rows.filter(r=>{
-    const cl = clusterOfFips.get(r.FIPS_Code),
-          ok = !activeState || r.State_Name === activeState;
-    return ok && selectedClusters.has(cl);
+    // ──────────────────────────────────────────────────────────
+  // filter by: clusters, state‐click, PCP brushes & histogram brush
+  // ──────────────────────────────────────────────────────────
+  const dataRows = rows.filter(r => {
+    if (activeScatterFips.size && !activeScatterFips.has(r.FIPS_Code)) {
+      return false; // omit any county not selected in scatter
+    }
+    const cl = clusterOfFips.get(r.FIPS_Code);
+    // 1) cluster must be selected
+    if (!selectedClusters.has(cl)) return false;
+    // 2) state‐click filter
+    if (activeState && r.State_Name !== activeState) return false;
+    // 2a) region‐click filter
+    if (activeRegion && stateRegion.get(r.State_Name) !== activeRegion) return false;
+    // 3) PCP brushing filter
+    for (const [col, [mn, mx]] of activePCPBrushes) {
+      if (r[col] < mn || r[col] > mx) return false;
+    }
+    return true;
   });
+
 
   const edu = [
     {key:"SomeCollege", col:eduCols.SomeCollege},
@@ -706,6 +958,8 @@ function drawDonut(){
 
       // re-filter map
       updateMapVisibility();
+      updatePCPVisibility();
+      drawScatter();
     });
 
   // labels & leader lines omitted for brevity…
@@ -751,7 +1005,7 @@ function makeMetricLegend(svg,W,H){
 
   const g = svg.append("g")
                .attr("id","metric-legend")
-               .attr("transform",`translate(${W-width-8},${H-32})`);
+               .attr("transform",`translate(8,${H-32})`);
   g.append("rect").attr("width",width).attr("height",height)
    .attr("fill","url(#lg)");
   g.append("g").attr("transform",`translate(0,${height})`)

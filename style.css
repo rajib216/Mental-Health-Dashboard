@@ -1,108 +1,272 @@
 /* Reset & typography */
-* { box-sizing:border-box; margin:0; padding:0 }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 body {
   font-family: system-ui, sans-serif;
-  background: #d8e2ec; color: #222; line-height:1.42;
+  background: #d8e2ec;
+  color: #222;
+  line-height: 1.42;
 }
 
 /* Header */
 header {
-  background:#2f4858; color:#fff;
-  padding:1rem 2rem; text-align:center;
+  background: #2f4858;
+  color: #fff;
+  padding: 1rem 2rem;
+  text-align: center;
 }
-h1 { font-size:1.8rem }
+h1 {
+  font-size: 1.8rem;
+}
 
 /* Grid layout */
 .dashboard {
-  display:grid; gap:1rem;
-  padding:1rem 2rem 2rem;
-  grid-template-columns:1fr 1fr;
-  grid-template-rows:55vh 45vh;
-  height:calc(100vh - 148px);
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 2rem 2rem;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 55vh 45vh;
+  height: calc(100vh - 148px);
 }
-#choropleth-container { grid-column:1; grid-row:1 }
-#pca-container        { grid-column:2; grid-row:1 }
-#pcp-container        { grid-column:1; grid-row:2 }
-#summary-container    {
-  grid-column:2; grid-row:2;
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:1rem;
+#choropleth-container { grid-column: 1; grid-row: 1; }
+#pca-container        { grid-column: 2; grid-row: 1; }
+#pcp-container        { grid-column: 1; grid-row: 2; }
+#summary-container {
+  grid-column: 2; grid-row: 2;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
 }
 
 /* Card */
 .cell {
-  background:#fff; border-radius:8px;
-  box-shadow:0 2px 4px rgba(0,0,0,.08);
-  padding:.75rem;
-  display:flex; flex-direction:column;
-  overflow:hidden;    /* clip any overflowing chart elements */
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,.08);
+  padding: .75rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-.cell>div {
-  flex:1; min-height:320px;
-  position:relative;
-  overflow:hidden;    /* ensure charts never push the container larger */
+
+/* radio-button selector */
+#map-mode-selector {
+  flex: 0 0 auto;
+  min-height: 0;
 }
-.cell svg {
-  width:100%; height:100%;
-  display:block;      /* remove any inline-block whitespace */
+
+/* PCA container must be relative to host the legend */
+#pca-container {
+  position: relative;
+}
+
+/* Styling for our HTML checkbox legend in the PCA panel */
+.pca-legend {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  flex: 0 0 auto;                     /* don’t flex-grow */
+  background: rgba(255,255,255,0.8);  /* “blended” look */
+  padding: 0.5rem;
+  border: none;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  font-size: 0.8rem;
 }
 
 /* Buttons */
-#reset-map,#reset-pcp {
-  margin-left:auto; font-size:.75rem;
-  padding:.2rem .6rem;
-  border:1px solid #666; border-radius:4px;
-  background:#eee; cursor:pointer;
+#reset-map,
+#reset-pcp
+{
+  margin-left: auto;
+  font-size: .75rem;
+  padding: .2rem .6rem;
+  border: 1px solid #666;
+  border-radius: 4px;
+  background: #eee;
+  cursor: pointer;
 }
-#reset-map:hover,#reset-pcp:hover { background:#ddd }
+#reset-map:hover,
+#reset-pcp:hover
+{
+  background: #ddd;
+}
 
-/* Select */
-#hist-select {
-  padding:.3rem .6rem; font-size:.9rem;
-  border:1px solid #bbb; border-radius:4px;
-  margin-bottom:.5rem; align-self:flex-start;
-}
 
 /* Responsive */
-@media(max-width:960px) {
+@media(max-width: 960px) {
   .dashboard {
-    grid-template-columns:1fr;
-    grid-template-rows:auto auto auto auto;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto auto;
   }
   #summary-container {
-    grid-template-columns:1fr;
+    grid-template-columns: 1fr;
   }
 }
-/* ────────────────────────────────────────────────────────── */
-/*  Dimmed elements when filtering                          */
-/* ────────────────────────────────────────────────────────── */
+
+/* Dimmed elements when filtering */
 .dim {
   opacity: 0.2;
 }
 
-/* Ensure PCA container can host an absolutely-positioned legend */
-#pca-container {
-  position: relative; /* ← make legend overlay relative to this */
+/* PCA grid-lines & labels */
+.grid-line {
+  stroke: #ccc;
+  stroke-opacity: 0.5;
+}
+.axis-label {
+  fill: #222;
+  font-family: system-ui;
 }
 
-/* Styling for our new HTML checkbox legend in the PCA panel */
-.pca-legend {
+/* Choropleth tweaks */
+#choropleth-container {
+  position: relative;
+}
+#map-mode-selector {
   position: absolute;
-  top: 18px;
+  bottom: 12px;
   right: 12px;
-  background: #fff;
-  padding: 10px;
-  border: 1px solid #ccc;
+  background: rgba(255,255,255,0.9);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  z-index: 10;
+}
+
+/* ensure the map-holder itself is a flex child that fills its .cell */
+#choropleth {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* then make its <svg> fill that holder, top-left */
+#choropleth svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1; 
+}
+
+
+/* ── add at the bottom of the Choropleth tweaks ── */
+#metric-selector {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: rgba(255,255,255,0.9);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  z-index: 10;
+}
+#metric-selector label {
+  font-size: 0.8rem;
+  margin-right: 0.3rem;
+}
+#metric-selector select {
+  font-size: 0.8rem;
+}
+
+/* NEW */
+.choropleth-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  position: relative;   /* so children position normally */
+  z-index: 20;          /* ↑ pull header & select above the map */
+  background: #fff;     /* ↑ keep it opaque so the map can’t peek through */
+}
+.choropleth-header .in-header {
+  margin-left: 1rem;
+  font-size: 0.85rem;
+}
+
+/* wherever you have .region-legend styles, change to: */
+/* .region-legend {
+  position: absolute;
+  left: 12px;
+  background: rgba(255,255,255,0.9);
+  padding: 0.5rem;
   border-radius: 4px;
   font-size: 0.8rem;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-  max-width: 120px;
+  pointer-events: none !important;
+  z-index: 5 !important;
+} */
+
+
+/* Ensure titles with buttons align nicely */
+#pcp-container h2
+{
+  display: flex;
+  align-items: center;
 }
-/* ────────────────────────────────────────────────────────── */
-/*  Make PCA grid‐lines visible                            */
-/* ────────────────────────────────────────────────────────── */
-.grid-line {
-  stroke: #ccc;         /* light grey */
-  stroke-opacity: 0.5;  /* half‐strength */
+
+/* ── Scatterplot panel ───────────────────────────────────── */
+#scatter-container h2 {
+  display: flex;
+  align-items: center;
 }
+
+#scatter-select {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.9rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  align-self: flex-start;
+}
+
+/* Scatterplot reset button */
+#reset-scatter {
+  margin-left: auto;
+  font-size: .75rem;
+  padding: .2rem .6rem;
+  border: 1px solid #666;
+  border-radius: 4px;
+  background: #eee;
+  cursor: pointer;
+}
+#reset-scatter:hover {
+  background: #ddd;
+}
+
+/* all chart containers should fill the remaining flex space */
+#pca-biplot,
+#pcp-plot,
+#donut-chart,
+#scatterplot {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* at the bottom of your existing style.css */
+.region-legend {
+  /* keep your positioning... */
+  position: absolute;
+  top: 5rem;
+  left: 1rem !important;
+  right: auto  !important;
+
+  /* let the map receive all mouse events underneath */
+  pointer-events: none;
+
+  /* send it behind the SVG (whose z-index is 1) */
+  z-index: 0;
+
+  /* if you still want a little “halo,” you can tone down the background */
+  background: rgba(255,255,255,0.6);
+  padding: 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+/* thicken all state-boundary paths inside your map’s SVG */
+#choropleth svg .states path {
+  stroke-width: 3px;
+  /* optional: make joins a bit smoother */
+  stroke-linejoin: round;
+}
+
