@@ -33,7 +33,9 @@ SHORT_COL = {
 # ─── Read data & select numeric columns ──────────────────────────
 df = pd.read_csv(DATA_PATH)
 num_cols = df.select_dtypes(include="number").columns.tolist()
-num_cols.remove("FIPS_Code")
+for c in ["FIPS_Code", "avgScore", "Wellbeing_Score_Raw", "Wellbeing_Score"]:
+    if c in num_cols:
+        num_cols.remove(c)
 X_df = df[num_cols].dropna()
 sel_index = X_df.index
 X = X_df.to_numpy()
