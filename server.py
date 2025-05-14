@@ -60,7 +60,8 @@ for k in range(1, 11):
     sse.append(model.inertia_)
 
 kneedle = KneeLocator(list(range(1,11)), sse, curve="convex", direction="decreasing")
-OPT_K   = int(kneedle.elbow or 4)
+# OPT_K   = int(kneedle.elbow or 4)
+OPT_K = 3
 clusters = KMeans(n_clusters=OPT_K, random_state=0, n_init=10).fit_predict(coords_n)
 
 # ─── Correlations with AvgScore → pick top-5 ───────────────────

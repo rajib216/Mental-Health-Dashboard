@@ -58,11 +58,15 @@ let selectedClusters = new Set();
 // track the latest PCP axis‐brush ranges for the map filter
 let activePCPBrushes = new Map();
 
-// color scales
-const regionColour  = {
-  Northeast:"#E4576E", Midwest:"#4E79A7",
-  South:"#76B7B2",     West:"#F28E2C", Southwest: "#59A14F"
-};
+// do this instead:
+const palette = ["#e41a1c","#984ea3","#ff7f00","#a65628","#f781bf"]; // whatever you like
+const uniqueRegions = Array.from(new Set(rows.map(r => r.Region)));
+const regionColour = {};
+uniqueRegions.forEach((reg,i) => {
+  regionColour[reg] = palette[i % palette.length];
+});
+
+
 const choroplethCol = d3.scaleSequential(d3.interpolateBlues);
 
 // helper to pick the right interpolator
@@ -108,7 +112,17 @@ choroplethCol.domain(d3.extent(rows, d => d[mapMetric]));
     drawScatter();
   });
 
-  drawMap(topo);
+  // after rows, stateOfFips, stateRegion are populated…
+  const palette       = ["#e41a1c","#984ea3","#ff7f00","#a65628","#f781bf"];
+  const uniqueRegions = Array.from(new Set(rows.map(r => r.Region)));
+  const regionColour  = {};
+  uniqueRegions.forEach((reg,i) => {
+    regionColour[reg] = palette[i % palette.length];
+  });
+
+  // then
+  drawMap(topo, regionColour, uniqueRegions);
+
   drawPCA();
 
   resetScatterBtn.addEventListener("click", () => {
@@ -142,194 +156,199 @@ choroplethCol.domain(d3.extent(rows, d => d[mapMetric]));
 /* ────────────────────────────────────────────────────────── */
 /*  DRAW CHOROPLETH                                         */
 /* ────────────────────────────────────────────────────────── */
-function drawMap(topo) {
+function drawMap(topo, regionColour, uniqueRegions) {
+  // clear out any previous map
   mapHolder.selectAll("*").remove();
+
   const W = mapHolder.node().clientWidth,
         H = mapHolder.node().clientHeight;
 
+  // projection + path
   const projection = d3.geoAlbersUsa()
-        .fitSize([W,H], topojson.feature(topo, topo.objects.counties));
+        .fitSize([W, H], topojson.feature(topo, topo.objects.counties));
   const path = d3.geoPath(projection);
 
+  // svg container
   const svg = mapHolder.append("svg")
                .attr("viewBox", `0 0 ${W} ${H}`);
 
-  // counties
-  svg.append("g").attr("class","counties")
-    .selectAll("path").data(topojson.feature(topo, topo.objects.counties).features)
+  // ── counties ──────────────────────────────────────────────
+  svg.append("g").attr("class", "counties")
+    .selectAll("path")
+    .data(topojson.feature(topo, topo.objects.counties).features)
     .join("path")
       .attr("d", path)
-      .attr("fill", d=>{
-        const r = rows.find(r=>r.FIPS_Code===+d.id);
-        if (!r) return "#f4a261";
-        else if (r[mapMetric] == null) return "#ccc";
-        else return choroplethCol(r[mapMetric]);
+      .attr("fill", d => {
+        const r = rows.find(r => r.FIPS_Code === +d.id);
+        if (!r) return "#f4a261";            // no data
+        if (r[mapMetric] == null) return "#ccc"; // null metric
+        return choroplethCol(r[mapMetric]);
       })
-      .attr("stroke","#fff").attr("stroke-width",.25)
-      .attr("cursor","pointer")
-      .on("click", (_,d) => {
+      .attr("stroke", "#fff")
+      .attr("stroke-width", 0.25)
+      .attr("cursor", "pointer")
+      .on("click", (_, d) => {
         const fips = +d.id,
               st   = stateOfFips.get(fips);
-    
         if (selectionMode === 'state') {
-          // state‐level click
           activeState  = (activeState === st ? null : st);
           activeRegion = null;
         } else {
-          // region‐level click
           const reg = stateRegion.get(st);
           activeRegion = (activeRegion === reg ? null : reg);
           activeState  = null;
         }
-    
         updateMapVisibility();
         drawDonut();
         updatePCPVisibility();
-        drawScatter(); 
+        drawScatter();
       })
-    
-      .append("title")
+    .append("title")
       .text(d => {
-        const f = +d.id,
-              st = stateOfFips.get(f)||"Unknown",
-              rg = stateRegion.get(st)||"Unknown",
+        const f   = +d.id,
+              st  = stateOfFips.get(f) || "Unknown",
+              rg  = stateRegion.get(st)   || "Unknown",
               val = rows.find(r=>r.FIPS_Code===f)?.[mapMetric];
         return `${st}\n${rg}\n${metricLabels[mapMetric]}: ${val}`;
       });
 
-
-  // state outlines
+  // ── state outlines (colored by region) ────────────────────
   svg.append("g").attr("class","states")
-    .selectAll("path").data(topojson.feature(topo, topo.objects.states).features)
+    .selectAll("path")
+    .data(topojson.feature(topo, topo.objects.states).features)
     .join("path")
       .attr("d", path)
-      .attr("fill","none")
-      .attr("stroke", d=>regionColour[stateRegion.get(d.properties.name)]||"#888");
+      .attr("fill", "none")
+      .attr("stroke", d => {
+        const reg = stateRegion.get(d.properties.name);
+        return regionColour[reg] || "#ccc";
+      })
+      .attr("stroke-width", 2);
 
+    // ── invisible click‐layer so you can click anywhere in a state ──
+    svg.append("g").attr("class","state-click-layer")
+    .selectAll("path")
+    .data(topojson.feature(topo, topo.objects.states).features)
+    .join("path")
+      .attr("d", path)
+      .attr("fill", "none")              // ← changed from "transparent"
+      .attr("pointer-events", "stroke")  // ← changed from "all"
+      .attr("cursor", "pointer")
+      .on("click", (event,d) => {
+        const st = d.properties.name;
+        if (selectionMode === 'state') {
+          activeState  = (activeState === st ? null : st);
+          activeRegion = null;
+        } else {
+          const reg = stateRegion.get(st);
+          activeRegion = (activeRegion === reg ? null : reg);
+          activeState  = null;
+        }
+        updateMapVisibility();
+        drawDonut();
+        updatePCPVisibility();
+        drawScatter();
+      });
+
+  // ── color‐bar legend for your metric ───────────────────────
   makeMetricLegend(svg, W, H);
 
-  // ─────────────────── metric dropdown hook ───────────────────
+  // ── **re-hook** the metric dropdown so AvgScore ↔ Wellbeing_Score still works
   d3.select("#choropleth-select").on("change", function() {
     mapMetric = this.value;
-  
-    // 1) recompute color domain & interpolator
+    // 1) update our interpolator & domain
     setInterpolator();
     choroplethCol.domain(d3.extent(rows, d => d[mapMetric]));
-  
-    // **NEW** — toss out the old gradient defs so makeMetricLegend can start fresh
+
+    // 2) rebuild the color‐bar
     svg.select("defs").remove();
-  
-    // 2) rebuild the colorbar
     d3.select("#metric-legend").remove();
     makeMetricLegend(svg, W, H);
-  
-    // 3) recolor each county (preserving any dimming)
+
+    // 3) recolor every county (preserving any dimming)
     svg.selectAll(".counties path")
       .attr("fill", d => {
         const r = rows.find(r => r.FIPS_Code === +d.id);
         if (!r) return "#f4a261";
-        else if (r[mapMetric] == null) return "#ccc";
-        else return choroplethCol(r[mapMetric]);
+        if (r[mapMetric] == null) return "#ccc";
+        return choroplethCol(r[mapMetric]);
       })
-      // 4) **also** update its <title> so your tooltip shows the right metric name & value
       .select("title")
         .text(d => {
-          const f = +d.id,
-                st = stateOfFips.get(f) || "Unknown",
-                rg = stateRegion.get(st) || "Unknown",
-                val = rows.find(r => r.FIPS_Code === f)?.[mapMetric];
+          const f   = +d.id,
+                st  = stateOfFips.get(f) || "Unknown",
+                rg  = stateRegion.get(st)   || "Unknown",
+                val = rows.find(r=>r.FIPS_Code===f)?.[mapMetric];
           return `${st}\n${rg}\n${metricLabels[mapMetric]}: ${val}`;
-        });
-  });
-  
+    });
+ });
 
-  // ─────────────────── region boundaries ───────────────────
-  const regionMesh = topojson.mesh(
-    topo, topo.objects.states,
-    (a,b) => stateRegion.get(a.properties.name)!==
-              stateRegion.get(b.properties.name)
-  );
-  svg.append("path")
-      .datum(regionMesh)
-      .attr("class","region-boundaries")
-      .attr("d", path)
-      .attr("fill","none")
-      .attr("stroke","#000")
-      .attr("stroke-width",2);
-
-  // ─────────────────── region legend ───────────────────
+  // ── region legend ─────────────────────────────────────────
   const regionLegend = d3.select("#choropleth-container")
     .append("div")
       .attr("class","region-legend")
-      .style("position","absolute")
-      .style("top","5rem")
-      .style("right","3rem")
-      .style("background","rgba(255,255,255,0.9)")
-      .style("padding","0.5rem")
+      .style("position",      "absolute")
+      .style("top",           "5rem")
+      .style("right",         "3rem")
+      .style("background",    "rgba(255,255,255,0.9)")
+      .style("padding",       "0.5rem")
       .style("border-radius","4px")
-      .style("font-size",".8rem")
-      .style("z-index","5")
-      .style("pointer-events","none"); // let all clicks fall “through” to the map;
+      .style("font-size",     ".8rem")
+      .style("pointer-events","none");
 
-  Object.entries(regionColour).forEach(([region,col],i) => {
+  uniqueRegions.forEach(reg => {
+    const col = regionColour[reg];
     const item = regionLegend.append("div")
-      .style("display","flex")
-      .style("align-items","center")
-      .style("margin-bottom","4px");
+      .style("display",       "flex")
+      .style("align-items",   "center")
+      .style("margin-bottom", "4px");
     item.append("span")
-      .style("display","inline-block")
-      .style("width","12px")
-      .style("height","12px")
-      .style("background",col)
-      .style("margin-right","6px");
-    item.append("span").text(region);
+      .style("display",       "inline-block")
+      .style("width",         "12px")
+      .style("height",        "12px")
+      .style("background",    col)
+      .style("margin-right",  "6px");
+    item.append("span").text(reg);
   });
-  
-  // expose for all filters
+
+  // ── updateMapVisibility (unchanged) ───────────────────────
   updateMapVisibility = () => {
     svg.selectAll(".counties path")
       .classed("dim", d => {
-        const fips = +d.id;
-        const r    = rows.find(r=>r.FIPS_Code===fips);
-        const st   = stateOfFips.get(fips);
-        const cl   = clusterOfFips.get(fips);
+        const fips = +d.id,
+              r    = rows.find(r=>r.FIPS_Code===fips),
+              st   = stateOfFips.get(fips),
+              cl   = clusterOfFips.get(fips);
 
-        // 1) PCA cluster filter
         if (!selectedClusters.has(cl)) return true;
-        // 2) state-click
-        if (activeState && st !== activeState) return true;
-        // 2a) region-click (NEW)
-        if (activeRegion && stateRegion.get(st) !== activeRegion) return true;
-        // 3) PCP brushes
+        if (activeState   && st   !== activeState) return true;
+        if (activeRegion  && stateRegion.get(st) !== activeRegion) return true;
         for (const [col,[mn,mx]] of activePCPBrushes) {
           if (r[col] < mn || r[col] > mx) return true;
         }
-        // 4) Scatter Brush
-        if (activeScatterFips.size && !activeScatterFips.has(fips)) {
-          return true;   // dim any county not in the scatter‐brush
-        }
-        // 5) donut slice
+        if (activeScatterFips.size && !activeScatterFips.has(fips)) return true;
         if (activeDonut) {
-          const thresh = donutMeans.get(activeDonut);
-          const col    = eduCols[activeDonut];
+          const thresh = donutMeans.get(activeDonut),
+                col    = eduCols[activeDonut];
           if (r[col] < thresh) return true;
         }
-        return false;  // else keep visible
+        return false;
       });
 
-    // dim states only on activeState or activeRegion
     svg.selectAll(".states path")
-    .classed("dim", d => {
-      if (selectionMode === 'state') {
-        return activeState  && d.properties.name !== activeState;
-      } else {
-        return activeRegion && stateRegion.get(d.properties.name) !== activeRegion;
-      }
-    });
-    
+      .classed("dim", d => {
+        if (selectionMode === 'state') {
+          return activeState && d.properties.name !== activeState;
+        } else {
+          return activeRegion && stateRegion.get(d.properties.name) !== activeRegion;
+        }
+      });
   };
+
+  // ── initial render ────────────────────────────────────────
   updateMapVisibility();
 }
+
 
 function drawPCA() {
   // clear out old biplot
@@ -347,8 +366,10 @@ function drawPCA() {
     // 1) clustering setup (use rawPoints so filtering doesn’t break map/PCP)
     // ──────────────────────────────────────────────────────────
     clusterOfFips = new Map(rawPoints.map(p => [p.fips, p.cluster]));
-    clusterColour = d3.scaleOrdinal(d3.schemeCategory10)
-                      .domain(d3.range(k));
+    const clusterPalette = ["#9467bd", "#8c564b", "#e377c2" /*, … more if k>3 */];
+    clusterColour = d3.scaleOrdinal()
+                    .domain(d3.range(k))
+                    .range(clusterPalette);
 
     // ──────────────────────────────────────────────────────────
     // 2) prepare rows & axes list
@@ -365,7 +386,7 @@ function drawPCA() {
     // Populate scatterplot dropdown & wire change → drawScatter
     // ──────────────────────────────────────────────────────────
     scatterSelect.selectAll("option").remove();
-    topAxes.forEach(ax => {
+    topAxes.filter(ax => ax.col !== 'AvgScore').forEach(ax => {
       scatterSelect.append("option")
       .attr("value", ax.col)
       .text(ax.short);
@@ -501,20 +522,23 @@ function drawPCA() {
     // ──────────────────────────────────────────────────────────
     // 9) loadings & AvgScore arrow (unchanged)
     // ──────────────────────────────────────────────────────────
+    // filter‐out unwanted vectors by their short name:
+    const exclude = ['Births','Deaths','DomMig','GrpQtrs','IntMig'];
+    const filteredLoadings = loadings.filter(l => !exclude.includes(l.name));
     const maxLen = d3.max(loadings, d => Math.hypot(d.x, d.y)),
           sf     = 0.5 / maxLen;
     const vecG = g.append("g")
                  .attr("stroke","#333")
                  .attr("stroke-width",1.1);
     vecG.selectAll("line")
-      .data(loadings).join("line")
+    .data(filteredLoadings).join("line")
         .attr("x1", x(0)).attr("y1", y(0))
         .attr("x2", d => x(d.x*sf)).attr("y2", d => y(d.y*sf))
         .attr("marker-end","url(#arr-black)")
         .append("title")
           .text(d => `${d.name}\nEigenvalue: ${d.eigenvalue}`);
     vecG.selectAll("text")
-      .data(loadings).join("text")
+    .data(filteredLoadings).join("text")
         .attr("class","loading-label")
         .attr("x", d => x(d.x*sf*1.05))
         .attr("y", d => y(d.y*sf*1.05))
@@ -637,9 +661,11 @@ function drawScatter() {
     .data(data).join("circle")
       .attr("cx", d=>x(d.x))
       .attr("cy", d=>y(d.y))
-      .attr("r", 4)
+      .attr("r", 3)
       .attr("fill-opacity", 0.8)
-      .attr("fill", "#444");
+      .attr("fill", d =>
+        clusterColour( clusterOfFips.get(d.fips) )
+      );
 
   // 2D brush
   const brush2d = d3.brush()
@@ -731,43 +757,45 @@ function drawPCP(){
     .join("g")
       .attr("class", "axis")
       .attr("transform", d => `translate(${x(d.col)},0)`)
-      .call(d3.drag()
-        // start with the axis’s current x-pos
-        .subject((event,d) => ({ x: x(d.col) }))
-        .on("start", function(event,d){
-          d3.select(this).raise().classed("dragging", true);
-        })
-        .on("drag", function(event,d){
-          // clamp to [0,width]
-          const xPos = Math.max(0, Math.min(width, event.x));
-          d3.select(this).attr("transform", `translate(${xPos},0)`);
+      // .call(d3.drag()
+      // // only start dragging if the event target isn't inside our brush <g>
+      // .filter(event => !event.sourceEvent.target.closest('.axis-brush'))
+      //   // start with the axis’s current x-pos
+      //   .subject((event,d) => ({ x: x(d.col) }))
+      //   .on("start", function(event,d){
+      //     d3.select(this).raise().classed("dragging", true);
+      //   })
+      //   .on("drag", function(event,d){
+      //     // clamp to [0,width]
+      //     const xPos = Math.max(0, Math.min(width, event.x));
+      //     d3.select(this).attr("transform", `translate(${xPos},0)`);
 
-          // build new order by reading each axis’s current x
-          const order = axes.nodes()
-            .map(node => {
-              const dd = d3.select(node).datum();
-              const tx = +d3.select(node)
-                             .attr("transform")
-                             .match(/translate\(([^,]+)/)[1];
-              return { dd, tx };
-            })
-            .sort((a,b) => a.tx - b.tx)
-            .map(o => o.dd);
+      //     // build new order by reading each axis’s current x
+      //     const order = axes.nodes()
+      //       .map(node => {
+      //         const dd = d3.select(node).datum();
+      //         const tx = +d3.select(node)
+      //                        .attr("transform")
+      //                        .match(/translate\(([^,]+)/)[1];
+      //         return { dd, tx };
+      //       })
+      //       .sort((a,b) => a.tx - b.tx)
+      //       .map(o => o.dd);
 
-          // update the shared topAxes & x-scale domain
-          topAxes = order;
-          x.domain(topAxes.map(d => d.col));
+      //     // update the shared topAxes & x-scale domain
+      //     topAxes = order;
+      //     x.domain(topAxes.map(d => d.col));
 
-          // immediately redraw the lines
-          updateVisibility();
-        })
-        .on("end", function(event,d){
-          d3.select(this).classed("dragging", false);
-          // snap all axes back to their new “official” x-positions
-          axes.transition()
-              .attr("transform", a => `translate(${x(a.col)},0)`);
-        })
-      );
+      //     // immediately redraw the lines
+      //     updateVisibility();
+      //   })
+      //   .on("end", function(event,d){
+      //     d3.select(this).classed("dragging", false);
+      //     // snap all axes back to their new “official” x-positions
+      //     axes.transition()
+      //         .attr("transform", a => `translate(${x(a.col)},0)`);
+      //   })
+      // );
 
   // now for each axis, re-attach your axis, label, and brush
   axes.each(function(dim){
@@ -905,16 +933,22 @@ function drawDonut(){
   const pieData = means.map(d=>({label:d.label, value:d.value/total}));
 
   const {width:W, height:H} = donutHolder.node().getBoundingClientRect();
-  const R = Math.min(W,H)*0.4, r0 = R*0.6;
+  const R = Math.min(W,H)*0.4, r0 = R*0.4;
 
   const svg = donutHolder.append("svg")
                .attr("viewBox",`0 0 ${W} ${H}`)
              .append("g")
                .attr("transform",`translate(${W/2},${H/2})`);
 
+  const donutPalette = [
+    "#ff7f0e",  // orange
+    "#8c564b",  // brown
+    "#7f7f7f",  // gray
+    "#00ffff"   // cyan
+    ];
   const color = d3.scaleOrdinal()
     .domain(pieData.map(d=>d.label))
-    .range(d3.schemeTableau10);
+    .range(donutPalette);
 
   const pie = d3.pie().value(d=>d.value).sort(null);
   const arc = d3.arc().innerRadius(r0).outerRadius(R);

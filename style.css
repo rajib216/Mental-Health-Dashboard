@@ -69,14 +69,20 @@ h1 {
   top: 12px;
   right: 12px;
   z-index: 10;
-  flex: 0 0 auto;                     /* don’t flex-grow */
-  background: rgba(255,255,255,0.8);  /* “blended” look */
-  padding: 0.5rem;
+  background: rgba(255,255,255,0.8);
+  padding: 0.75rem;     /* bigger box */
   border: none;
   border-radius: 4px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  font-size: 0.8rem;
+  font-size: 1rem;      /* larger text */
+  line-height: 1.3;     /* optional, for spacing */
 }
+
+/* make the checked‐box accent a subtle gray */
+.pca-legend input[type="checkbox"] {
+  accent-color: gray;
+}
+
 
 /* Buttons */
 #reset-map,
@@ -186,19 +192,6 @@ h1 {
   font-size: 0.85rem;
 }
 
-/* wherever you have .region-legend styles, change to: */
-/* .region-legend {
-  position: absolute;
-  left: 12px;
-  background: rgba(255,255,255,0.9);
-  padding: 0.5rem;
-  border-radius: 4px;
-  font-size: 0.8rem;
-  pointer-events: none !important;
-  z-index: 5 !important;
-} */
-
-
 /* Ensure titles with buttons align nicely */
 #pcp-container h2
 {
@@ -270,3 +263,11 @@ h1 {
   stroke-linejoin: round;
 }
 
+/* Subtitle under the global title */
+header .subtitle {
+  font-size: 1rem;
+  font-weight: 400;
+  color: #e0e6f0;     /* a light bluish gray to fit your theme */
+  margin-top: 0.25rem;
+  line-height: 1.2;
+}
